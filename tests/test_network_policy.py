@@ -2,6 +2,7 @@
 
 import socket
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -120,3 +121,33 @@ def test_gateway_command_must_be_verified_as_hermes_launcher(monkeypatch, tmp_pa
     launcher.chmod(0o755)
     assert _is_proxy_aware_gateway_command(["hermes", "gateway", "run"])
     assert not _is_proxy_aware_gateway_command(["hermes", "chat"])
+
+
+def test_hermes_patch_guards_every_declared_network_entry_point():
+    """Keep the integration patch in sync with the policy's channel list."""
+    patch = (Path(__file__).parents[1] / "patches" /
+             "0004-central-network-policy-fail-closed.patch").read_text()
+
+    required_guards = {
+        "Firecrawl": "authorize(\n+        NetworkChannel.WEB_TOOL",
+        "auxiliary LLM": "NetworkChannel.LLM",
+        "MCP": "NetworkChannel.MCP",
+        "Discord voice": "authorize_raw_socket(NetworkChannel.UDP_VOICE)",
+        "SMTP": "authorize_raw_socket(NetworkChannel.SMTP)",
+        "IMAP": "authorize_raw_socket(NetworkChannel.IMAP)",
+        "IRC": "authorize_raw_socket(NetworkChannel.IRC)",
+    }
+    for entry_point, guard in required_guards.items():
+        assert guard in patch, f"missing policy guard for {entry_point}"
+
+
+@pytest.mark.parametrize("constructor", [
+    '_wt._firecrawl_client = _wt.Firecrawl(**kwargs)',
+    'imap = imaplib.IMAP4_SSL(',
+])
+def test_hermes_patch_authorizes_before_network_construction(constructor):
+    patch = (Path(__file__).parents[1] / "patches" /
+             "0004-central-network-policy-fail-closed.patch").read_text()
+    constructor_offset = patch.index(constructor)
+    preceding_hunk = patch[patch.rfind("@@", 0, constructor_offset):constructor_offset]
+    assert "authorize" in preceding_hunk

@@ -1,112 +1,147 @@
-"""Proxy-aware HTTP helpers for Hermes execute_code blocks.
+"""Proxy-aware, privacy-preserving HTTP helpers for execute-code blocks."""
 
-These functions create httpx clients with SOCKS5 transports when
-TOR_ENABLED=1 is set in the environment. When Tor is disabled or
-unavailable, they fall back to direct connections.
+from __future__ import annotations
 
-socksio is already installed in the Hermes venv — no extra deps needed.
-
-Usage in an execute_code block:
-
-    import os
-    os.environ["TOR_ENABLED"] = "1"
-
-    from hermes_tor.proxy_http import tor_get, tor_post, check_tor_connection
-
-    # Verify Tor is working
-    status = check_tor_connection()
-    print(f"Using Tor: {status['using_tor']}")
-
-    # Make anonymous requests
-    data = tor_get("https://httpbin.org/ip")
-    print(data["text"])
-
-Environment variables:
-    TOR_ENABLED  — "1"/"true"/"yes" to route through Tor (default: disabled)
-    TOR_PROXY    — SOCKS5 proxy URL (default: socks5://127.0.0.1:9050)
-"""
+import json
 import logging
 import os
-from typing import Any
+import re
+from typing import Any, NotRequired, TypeAlias, TypedDict
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROXY = "socks5://127.0.0.1:9050"
+DEFAULT_MAX_BODY_BYTES = 1_048_576
+
+
+class ResponseTooLargeError(ValueError):
+    """Raised before or during download when a response exceeds its limit."""
+
+
+JSONValue: TypeAlias = None | bool | int | float | str | list["JSONValue"] | dict[str, "JSONValue"]
+ResponseBody: TypeAlias = JSONValue | dict[str, str] | bytes
+
+
+class SafeHTTPResponse(TypedDict):
+    """The deliberately small, persistence-safe default response shape."""
+
+    status_code: int
+    headers: dict[str, str]
+    url: str
+    body: ResponseBody
+    body_type: str
+    size_bytes: int
+    sensitive: NotRequired[bool]
+    persistence: NotRequired[str]
+
+
+_EXCLUDED_HEADERS = {
+    "authorization",
+    "authentication-info",
+    "proxy-authenticate",
+    "proxy-authentication-info",
+    "set-cookie",
+    "www-authenticate",
+}
 
 
 def _is_tor_enabled() -> bool:
-    """Check if Tor routing is enabled via environment variable."""
     return os.environ.get("TOR_ENABLED", "").lower() in ("1", "true", "yes")
 
 
 def _get_proxy_url() -> str:
-    """Get the SOCKS5 proxy URL from environment or default."""
     return os.environ.get("TOR_PROXY", DEFAULT_PROXY)
 
 
 def _get_transport(use_tor: bool = True):
-    """Return a SOCKS5 transport if Tor is enabled, None for direct connection.
-
-    Uses httpx.HTTPTransport with socks5 proxy. socksio is already
-    installed in the Hermes venv — it handles the SOCKS protocol
-    without additional dependencies.
-    """
     if use_tor and _is_tor_enabled():
         return httpx.HTTPTransport(proxy=_get_proxy_url())
     return None
 
 
-def tor_get(url: str, use_tor: bool = True, timeout: float = 30.0, **kwargs) -> dict:
-    """HTTP GET through Tor (or direct if Tor disabled).
-
-    Args:
-        url: Target URL.
-        use_tor: If False, always use direct connection.
-        timeout: Request timeout in seconds.
-        **kwargs: Passed to httpx.Client.get().
-
-    Returns:
-        dict with status_code, text, headers, url keys.
-    """
-    transport = _get_transport(use_tor)
-    with httpx.Client(
-        transport=transport,
-        timeout=timeout,
-        follow_redirects=True,
-    ) as client:
-        resp = client.get(url, **kwargs)
-        resp.raise_for_status()
-        return {
-            "status_code": resp.status_code,
-            "headers": dict(resp.headers),
-            "text": resp.text,
-            "url": str(resp.url),
-        }
+def _safe_url(url: httpx.URL | str) -> str:
+    """Remove credentials, query parameters, and fragments from a URL."""
+    parts = urlsplit(str(url))
+    hostname = parts.hostname or ""
+    if ":" in hostname and not hostname.startswith("["):
+        hostname = f"[{hostname}]"
+    netloc = hostname
+    if parts.port is not None:
+        netloc += f":{parts.port}"
+    return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
-def tor_post(
-    url: str,
-    use_tor: bool = True,
-    timeout: float = 30.0,
-    **kwargs,
-) -> dict:
-    """HTTP POST through Tor (or direct if Tor disabled)."""
-    transport = _get_transport(use_tor)
-    with httpx.Client(
-        transport=transport,
-        timeout=timeout,
-        follow_redirects=True,
-    ) as client:
-        resp = client.post(url, **kwargs)
-        resp.raise_for_status()
-        return {
-            "status_code": resp.status_code,
-            "headers": dict(resp.headers),
-            "text": resp.text,
-            "url": str(resp.url),
-        }
+def _safe_headers(headers: httpx.Headers) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for name, value in headers.items():
+        lower = name.lower()
+        if lower in _EXCLUDED_HEADERS or lower.startswith("proxy-"):
+            continue
+        if lower == "location":
+            location = urlsplit(value)
+            # Redirect paths sometimes embed bearer/reset tokens. Omit suspect
+            # locations instead of attempting to redact secrets heuristically.
+            if (
+                location.username
+                or location.password
+                or location.query
+                or location.fragment
+                or re.search(r"(?:token|secret|password|session|auth|key)", location.path, re.I)
+            ):
+                continue
+            result[name] = _safe_url(value)
+        else:
+            result[name] = value
+    return result
+
+
+def _parse_body(data: bytes, content_type: str) -> tuple[ResponseBody, str]:
+    media_type = content_type.partition(";")[0].strip().lower()
+    if media_type == "application/json" or media_type.endswith("+json"):
+        try:
+            return json.loads(data), "json"
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return data.decode("utf-8", errors="replace"), "text"
+    if media_type.startswith("text/") or media_type in {
+        "application/javascript",
+        "application/xml",
+        "application/xhtml+xml",
+    } or media_type.endswith("+xml"):
+        return data.decode("utf-8", errors="replace"), "text"
+    # Binary content is represented by metadata unless raw-body capability is set.
+    return {"content_type": media_type or "application/octet-stream"}, "binary"
+
+
+def _read_limited(response: httpx.Response, max_body_bytes: int) -> bytes:
+    if max_body_bytes < 0:
+        raise ValueError("max_body_bytes must be non-negative")
+    content_length = response.headers.get("content-length")
+    if content_length:
+        try:
+            advertised_size = int(content_length)
+        except ValueError:
+            # Invalid Content-Length is untrusted input; enforce while streaming.
+            pass
+        else:
+            if advertised_size > max_body_bytes:
+                raise ResponseTooLargeError(
+                    f"response Content-Length {content_length} exceeds "
+                    f"max_body_bytes={max_body_bytes}"
+                )
+
+    chunks: list[bytes] = []
+    size = 0
+    for chunk in response.iter_bytes():
+        size += len(chunk)
+        if size > max_body_bytes:
+            raise ResponseTooLargeError(
+                f"streamed response exceeds max_body_bytes={max_body_bytes}"
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def tor_request(
@@ -114,78 +149,77 @@ def tor_request(
     url: str,
     use_tor: bool = True,
     timeout: float = 30.0,
-    **kwargs,
-) -> dict:
-    """Generic HTTP request through Tor."""
-    transport = _get_transport(use_tor)
-    with httpx.Client(
-        transport=transport,
-        timeout=timeout,
-        follow_redirects=True,
-    ) as client:
-        resp = client.request(method, url, **kwargs)
-        resp.raise_for_status()
-        return {
-            "status_code": resp.status_code,
-            "headers": dict(resp.headers),
-            "text": resp.text,
-            "url": str(resp.url),
-        }
+    *,
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+    include_sensitive_headers: bool = False,
+    include_raw_body: bool = False,
+    include_full_url: bool = False,
+    **kwargs: Any,
+) -> SafeHTTPResponse:
+    """Make a request with bounded streaming and a privacy-safe response.
 
-
-def check_tor_connection(timeout: float = 30.0) -> dict:
-    """Check if we can reach the internet through Tor.
-
-    Hits https://check.torproject.org/ through the SOCKS5 proxy.
-    Parses the response to determine if traffic is routing through Tor.
-
-    Returns:
-        dict with keys: tor_available, using_tor, exit_ip, error
+    The three ``include_*`` arguments are explicit capabilities. Enabling any of
+    them marks the result ``sensitive`` and ``persistence='suppress'`` so callers
+    can prevent transcript/log persistence.
     """
-    result = {
-        "tor_available": False,
-        "using_tor": False,
-        "exit_ip": None,
-        "error": None,
-    }
+    transport = _get_transport(use_tor)
+    with httpx.Client(transport=transport, timeout=timeout, follow_redirects=True) as client:
+        with client.stream(method, url, **kwargs) as response:
+            response.raise_for_status()
+            data = _read_limited(response, max_body_bytes)
+            body, body_type = _parse_body(data, response.headers.get("content-type", ""))
+            if include_raw_body:
+                body, body_type = data, "bytes"
+            result: SafeHTTPResponse = {
+                "status_code": response.status_code,
+                "headers": (
+                    dict(response.headers) if include_sensitive_headers else _safe_headers(response.headers)
+                ),
+                "url": str(response.url) if include_full_url else _safe_url(response.url),
+                "body": body,
+                "body_type": body_type,
+                "size_bytes": len(data),
+            }
+            if include_sensitive_headers or include_raw_body or include_full_url:
+                result["sensitive"] = True
+                result["persistence"] = "suppress"
+            return result
 
+
+def tor_get(url: str, use_tor: bool = True, timeout: float = 30.0, **kwargs: Any) -> SafeHTTPResponse:
+    """HTTP GET through Tor (or directly when Tor is disabled)."""
+    return tor_request("GET", url, use_tor=use_tor, timeout=timeout, **kwargs)
+
+
+def tor_post(url: str, use_tor: bool = True, timeout: float = 30.0, **kwargs: Any) -> SafeHTTPResponse:
+    """HTTP POST through Tor (or directly when Tor is disabled)."""
+    return tor_request("POST", url, use_tor=use_tor, timeout=timeout, **kwargs)
+
+
+def check_tor_connection(timeout: float = 30.0) -> dict[str, Any]:
+    """Check whether the configured proxy reaches the Tor check service."""
+    result = {"tor_available": False, "using_tor": False, "exit_ip": None, "error": None}
     if not _is_tor_enabled():
         result["error"] = "TOR_ENABLED is not set to 1/true/yes"
         return result
-
     try:
         data = tor_get("https://check.torproject.org/", timeout=timeout)
         result["tor_available"] = True
-
-        text = data["text"]
+        text = data["body"] if data["body_type"] == "text" else ""
         if "Congratulations" in text and "Tor" in text:
             result["using_tor"] = True
-
-        # Try to extract exit IP
-        import re
         ip_match = re.search(
-            r"IP address appears to be:\s*<strong>([\d.]+)</strong>",
-            text,
-            re.IGNORECASE,
+            r"IP address appears to be:\s*<strong>([\d.]+)</strong>", text, re.IGNORECASE
         )
         if ip_match:
             result["exit_ip"] = ip_match.group(1)
-
-    except Exception as e:
-        result["error"] = str(e)
-
+    except Exception as exc:
+        result["error"] = str(exc)
     return result
 
 
 def inject_tor_env(socks_proxy_url: str = DEFAULT_PROXY):
-    """Set environment variables so subagents use Tor automatically.
-
-    Subagents run in ThreadPoolExecutor threads — they inherit
-    the parent's os.environ. Call this before delegate_task().
-
-    Args:
-        socks_proxy_url: SOCKS5 proxy URL (default: socks5://127.0.0.1:9050)
-    """
+    """Enable Tor for this process and inherited child environments."""
     os.environ["TOR_PROXY"] = socks_proxy_url
     os.environ["TOR_ENABLED"] = "1"
     logger.info("Tor environment injected: TOR_ENABLED=1, TOR_PROXY=%s", socks_proxy_url)

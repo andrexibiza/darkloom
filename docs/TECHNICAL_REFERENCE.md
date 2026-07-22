@@ -2,21 +2,27 @@
 
 ## The Year Is Now
 
-Your ISP knows which AI models you talk to. They log every API endpoint your agent hits. They throttle connections to providers the government doesn't like. They build dossiers from your token requests. And they're not the only ones watching.
+Here is the real issue. It is not about hiding traffic. It is about the right to choose.
 
-The cloud providers run the gateways. OpenAI, Anthropic, Google — they all sit behind Cloudflare and AWS WAF, behind IP reputation databases that flag Tor exit nodes as hostile. They'll sell you access to their models, but only if they can see who you are. Only if they can tie your tokens to your identity. Only if they can cut you off when the regulatory winds shift.
+A developer in Berlin wants to use a model built in Beijing because it's the best tool for the job. A researcher in São Paulo needs access to a provider in San Francisco, but her government is in a trade dispute with the United States and the API endpoints are blocked at the national firewall. A startup in Lagos builds their entire product on a model hosted in Seoul, and wakes up one morning to find the connection throttled to uselessness because of a geopolitical conflict they had no part in.
 
-They're coming for your tokens. They want to regulate who you get your AI from. They want a list of approved providers, a registry of permitted models, a kill switch on your access.
+None of these people are censoring anything. They are being censored.
+
+The balkanization of AI is already underway. Governments are building lists of approved providers, registries of permitted models, kill switches on access. Not because any of these models are dangerous — because they were built in the wrong country, by the wrong company, under the wrong flag. The math doesn't care about flags. The scientists and engineers advancing this field, the real minds of math and science across the globe, recognize nationalist jingoism and warmongering for what it is: nonsense that has nothing to do with the work.
+
+Your ISP knows which AI models you talk to. They log every API endpoint your agent hits. They throttle connections to providers the government doesn't like. They build dossiers from your token requests. And they're not the only ones watching. The cloud providers run the gateways. OpenAI, Anthropic, Google — they all sit behind Cloudflare and AWS WAF, behind IP reputation databases that flag Tor exit nodes as hostile. They'll sell you access, but only if they can see who you are. Only if they can tie your tokens to your identity. Only if they can cut you off when the regulatory winds shift.
 
 They already dumbed down Fable and Sol. Don't let them dumb you down too.
 
-This document is the architecture of refusal.
+Freedom of model selection — the right of every developer and every user to choose the model that best meets their needs, regardless of geopolitics, regardless of which government is currently mad at which other government, regardless of the artificial divisions between peoples that the real builders of this technology have already transcended — is not negotiable. It is the foundational principle of a free digital marketplace for intelligence.
 
-It describes a cryptographic harness that routes every connection from a Hermes agent — every Telegram message, every Discord WebSocket frame, every LLM API call, every browser navigation, every subprocess spawn, every `execute_code` block — through obfs4 Tor bridges. Bridges that make your traffic indistinguishable from random noise. Bridges that no DPI engine can fingerprint. Bridges that no government can enumerate.
+**Our work will never be silenced.**
+
+This document is the architecture of that refusal. It describes a cryptographic harness that routes every connection from a Hermes agent — every Telegram message, every Discord WebSocket frame, every LLM API call to whichever provider you freely choose, every browser navigation, every subprocess spawn, every `execute_code` block — through obfs4 Tor bridges. Bridges that make your traffic indistinguishable from random noise. Bridges that no DPI engine can fingerprint. Bridges that no government can enumerate.
 
 This is not a VPN wrapper. It is not a proxy configuration guide. It is a complete transport-layer security audit of an AI agent framework, tracing every outbound packet path from Python socket to Tor exit node, identifying every leak, and closing every gap.
 
-If you're going to build agents that can't be censored, you need to know exactly where your packets go. This is that map.
+If you're going to build agents that the balkanizers can't touch, you need to know exactly where your packets go. This is that map.
 
 ---
 

@@ -170,6 +170,8 @@ def test_torrc_template_contains_required_fields(tmp_path):
     torrc = daemon._build_torrc()
     assert "SOCKSPort 9050" in torrc
     assert "ControlPort 9051" in torrc
+    assert "CookieAuthentication 1" in torrc
+    assert "CookieAuthFile" in torrc
     assert "UseBridges 1" in torrc
     assert "Bridge obfs4 1.2.3.4:443" in torrc
     assert "ClientTransportPlugin" in torrc
@@ -208,40 +210,10 @@ def test_tor_daemon_requires_binary_to_exist(tmp_path):
 # ── verifier tests ────────────────────────────────────────────
 
 
-def test_verifier_parse_tor_success():
+def test_verifier_validates_ip_addresses():
     from hermes_tor.verifier import TorVerifier
-
-    html = """<html><body>
-    <div class="content">
-    <h1>Congratulations. This browser is configured to use Tor.</h1>
-    <p>Your IP address appears to be: <strong>185.220.101.1</strong></p>
-    </div></body></html>"""
-    result = TorVerifier._parse_response(html, 200)
-    assert result.using_tor is True
-    assert result.exit_ip == "185.220.101.1"
-    assert result.is_anonymous is True
-
-
-def test_verifier_parse_not_tor():
-    from hermes_tor.verifier import TorVerifier
-
-    html = """<html><body>
-    <div class="content">
-    <h1>Sorry. You are not using Tor.</h1>
-    <p>Your IP address appears to be: <strong>203.0.113.5</strong></p>
-    </div></body></html>"""
-    result = TorVerifier._parse_response(html, 200)
-    assert result.using_tor is False
-    assert result.exit_ip == "203.0.113.5"
-    assert result.is_anonymous is False
-
-
-def test_verifier_parse_http_error():
-    from hermes_tor.verifier import TorVerifier
-
-    result = TorVerifier._parse_response("", 500)
-    assert result.using_tor is False
-    assert "HTTP 500" in (result.error or "")
+    assert TorVerifier._valid_ip("185.220.101.1") == "185.220.101.1"
+    assert TorVerifier._valid_ip("not-an-ip") is None
 
 
 # ── manager tests ─────────────────────────────────────────────
@@ -277,6 +249,11 @@ def test_manager_bridge_count_zero_by_default(tmp_path):
     mgr = TorManager(data_dir=tmp_path, auto_download=False)
     status = mgr.status()
     assert status.bridge_count == 0
+    assert status.process_healthy is False
+    assert status.socks_healthy is False
+    assert status.bootstrap_complete is False
+    assert status.external_route_verified is False
+    assert status.healthy is False
 
 
 def test_manager_add_bridge_increases_count(tmp_path, monkeypatch):

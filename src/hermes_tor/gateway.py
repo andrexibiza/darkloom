@@ -31,6 +31,7 @@ import os
 import sys
 import threading
 import time
+import tempfile
 from pathlib import Path
 from typing import Optional
 
@@ -52,6 +53,7 @@ GATEWAY_ENV_VARS = {
     "HTTP_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
     "TOR_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
     "TOR_ENABLED": "1",
+    "TOR_HEALTH": "1",
 }
 
 # When TOR_SKIP_LLM=1, LLM API calls bypass Tor to avoid exit node blocking.
@@ -98,6 +100,13 @@ def clear_gateway_env():
     logger.info("Gateway Tor environment cleared")
 
 
+def block_gateway_env():
+    """Fail closed before recovery; never expose clients to a direct fallback."""
+    blocked = "socks5://127.0.0.1:1"
+    for key in GATEWAY_ENV_VARS:
+        os.environ[key] = "0" if key in {"TOR_ENABLED", "TOR_HEALTH"} else blocked
+
+
 def skip_llm_proxy():
     """Remove proxy vars so LLM API calls bypass Tor.
 
@@ -127,6 +136,7 @@ def is_llm_skipped() -> bool:
 def write_gateway_env_file(
     socks_port: int = DEFAULT_SOCKS_PORT,
     env_path: Optional[Path] = None,
+    healthy: bool = True,
 ):
     """Write ALL_PROXY and related vars to ~/.hermes/.env for persistent config.
 
@@ -158,7 +168,8 @@ def write_gateway_env_file(
         "HTTPS_PROXY": proxy_url,
         "HTTP_PROXY": proxy_url,
         "TOR_PROXY": proxy_url,
-        "TOR_ENABLED": "1",
+        "TOR_ENABLED": "1" if healthy else "0",
+        "TOR_HEALTH": "1" if healthy else "0",
     }
     existing.update(tor_vars)
 
@@ -168,7 +179,13 @@ def write_gateway_env_file(
         lines.append(f"{key}={value}")
 
     env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text("\n".join(lines) + "\n")
+    # Replace, rather than rewrite, so readers see either complete version.
+    fd, temporary = tempfile.mkstemp(dir=env_path.parent, prefix=f".{env_path.name}.")
+    with os.fdopen(fd, "w") as stream:
+        stream.write("\n".join(lines) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, env_path)
     logger.info("Gateway Tor config written to %s (%d vars)", env_path, len(tor_vars))
 
 
@@ -275,7 +292,7 @@ class TorWatchdog:
         """Check Tor health. Restart if dead. Rotate circuit if due."""
         status = self._mgr.status()
 
-        if status.state.name == "RUNNING" and status.circuit_established:
+        if status.state.name == "RUNNING" and status.healthy:
             self._restart_count = 0  # Reset counter on stable state
 
             # Circuit rotation
@@ -284,10 +301,11 @@ class TorWatchdog:
                 self._rotate_circuit()
                 self._last_circuit_rotation = now
 
-        elif status.state.name == "ERROR" or not status.circuit_established:
+        elif status.state.name == "ERROR" or not status.healthy:
             logger.warning(
-                "Tor health check failed (state=%s, circuit=%s) — attempting restart",
-                status.state.name, status.circuit_established,
+                "Tor layered health check failed (state=%s, process=%s, socks=%s, bootstrap=%s, route=%s)",
+                status.state.name, status.process_healthy, status.socks_healthy,
+                status.bootstrap_complete, status.external_route_verified,
             )
             self._restart_tor()
 
@@ -297,6 +315,9 @@ class TorWatchdog:
 
     def _restart_tor(self):
         """Restart Tor daemon with exponential backoff."""
+        # Block new connections before stopping Tor or waiting through backoff.
+        block_gateway_env()
+        write_gateway_env_file(1, healthy=False)
         if self._restart_count >= self._max_restart_attempts:
             logger.error(
                 "Tor restart limit reached (%d/%d) — watchdog giving up. "
@@ -324,7 +345,8 @@ class TorWatchdog:
         # Restart
         try:
             status = self._mgr.start(timeout=60)
-            if status.state.name == "RUNNING":
+            status = self._mgr.status(verify_route=True)
+            if status.state.name == "RUNNING" and status.healthy:
                 logger.info("Tor restarted successfully (attempt %d)", self._restart_count)
                 self._restart_count = 0
 
@@ -344,19 +366,11 @@ class TorWatchdog:
         Sends NEWNYM signal via ControlPort if available.
         Falls back to daemon restart for circuit rotation.
         """
-        try:
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect(("127.0.0.1", self._mgr.control_port))
-            sock.sendall(b"AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n")
-            response = sock.recv(1024)
-            sock.close()
-            if b"250" in response:
-                logger.info("Tor circuit rotated via NEWNYM signal")
-                return
-        except Exception:
-            logger.debug("NEWNYM via ControlPort failed, restarting daemon for fresh circuit")
+        daemon = self._mgr._daemon
+        if daemon and daemon.signal_newnym():
+            logger.info("Tor circuit rotated via authenticated NEWNYM signal")
+            return
+        logger.debug("Authenticated NEWNYM failed, restarting daemon for fresh circuit")
 
         # Fallback: restart daemon for fresh circuit
         logger.info("Restarting Tor daemon for fresh circuit...")
@@ -402,6 +416,14 @@ def start_tor_for_gateway(
     if status.state.name != "RUNNING":
         raise RuntimeError(f"Tor failed to start: {status.error}")
 
+    # No client is enabled and no persistent proxy is written until all four
+    # layers have independently passed.
+    status = mgr.status(verify_route=True)
+    if not status.healthy:
+        block_gateway_env()
+        mgr.stop()
+        raise RuntimeError(f"Tor verification failed: {status.verification_error or status}")
+
     # Inject environment
     inject_gateway_env(socks_port)
 
@@ -410,9 +432,10 @@ def start_tor_for_gateway(
         write_gateway_env_file(socks_port)
 
     logger.info(
-        "Tor ready for gateway — SOCKS5 %s, circuit %s, bridges %d, uptime %.1fs",
+        "Tor ready for gateway — SOCKS5 %s, bootstrap %s, route verified %s, bridges %d, uptime %.1fs",
         status.socks_proxy_url,
-        "established" if status.circuit_established else "pending",
+        status.bootstrap_percent,
+        status.external_route_verified,
         status.bridge_count,
         status.uptime_seconds or 0,
     )

@@ -55,11 +55,21 @@ class TorStatus:
 
     state: TorState
     socks_proxy_url: str | None = None
-    circuit_established: bool = False
+    process_healthy: bool = False
+    socks_healthy: bool = False
+    bootstrap_percent: int | None = None
+    bootstrap_complete: bool = False
+    external_route_verified: bool = False
     bridge_count: int = 0
     exit_ip: str | None = None
     error: str | None = None
     uptime_seconds: float | None = None
+    verification_error: str | None = None
+
+    @property
+    def healthy(self) -> bool:
+        return (self.process_healthy and self.socks_healthy and
+                self.bootstrap_complete and self.external_route_verified)
 
 
 class TorManager:
@@ -194,10 +204,13 @@ class TorManager:
             self._start_time = None
         return self.status()
 
-    def status(self) -> TorStatus:
-        """Return current Tor status snapshot."""
+    def status(self, verify_route: bool = True) -> TorStatus:
+        """Return independently measured process, SOCKS, control, and route state."""
         running = bool(self._daemon and self._daemon.is_running)
-        healthy = self._daemon.health_check() if running else False
+        process_healthy = self._daemon.process_health() if running else False
+        socks_healthy = self._daemon.health_check() if process_healthy else False
+        bootstrap, control_error = self._daemon.bootstrap_status() if process_healthy else (None, None)
+        verification = self._verifier.verify() if verify_route and socks_healthy and bootstrap == 100 else None
 
         uptime = None
         if self._start_time and running:
@@ -206,9 +219,15 @@ class TorManager:
         return TorStatus(
             state=self._state,
             socks_proxy_url=self.socks_proxy_url,
-            circuit_established=healthy,
+            process_healthy=process_healthy,
+            socks_healthy=socks_healthy,
+            bootstrap_percent=bootstrap,
+            bootstrap_complete=bootstrap == 100,
+            external_route_verified=bool(verification and verification.using_tor),
+            exit_ip=verification.exit_ip if verification else None,
             bridge_count=len(self._bridges),
             uptime_seconds=uptime,
+            verification_error=(verification.error if verification else control_error),
         )
 
     def verify(self) -> VerificationResult:

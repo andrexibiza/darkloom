@@ -71,7 +71,11 @@ def tor_start(socks_port: int = 9050, timeout: float = 60.0) -> str:
     return json.dumps({
         "state": status.state.name,
         "socks_proxy_url": status.socks_proxy_url,
-        "circuit_established": status.circuit_established,
+        "process_healthy": status.process_healthy,
+        "socks_healthy": status.socks_healthy,
+        "bootstrap_percent": status.bootstrap_percent,
+        "bootstrap_complete": status.bootstrap_complete,
+        "external_route_verified": status.external_route_verified,
         "bridge_count": status.bridge_count,
         "uptime_seconds": status.uptime_seconds,
         "error": status.error,
@@ -92,7 +96,11 @@ def tor_status() -> str:
     return json.dumps({
         "state": status.state.name,
         "socks_proxy_url": status.socks_proxy_url,
-        "circuit_established": status.circuit_established,
+        "process_healthy": status.process_healthy,
+        "socks_healthy": status.socks_healthy,
+        "bootstrap_percent": status.bootstrap_percent,
+        "bootstrap_complete": status.bootstrap_complete,
+        "external_route_verified": status.external_route_verified,
         "bridge_count": status.bridge_count,
         "exit_ip": status.exit_ip,
         "uptime_seconds": status.uptime_seconds,
@@ -103,8 +111,8 @@ def tor_status() -> str:
 def tor_verify() -> str:
     """Verify traffic routes through Tor.
 
-    Hits https://check.torproject.org/ through the SOCKS5 proxy
-    and reports whether the exit node is a Tor relay.
+    Requires Tor's structured HTTPS API and an independent HTTPS service to
+    report the same exit address through the SOCKS5 proxy.
     """
     mgr = get_manager()
     result = mgr.verify()
@@ -174,7 +182,7 @@ TOOLS = [
     },
     {
         "name": "tor_status",
-        "description": "Get current Tor daemon status: state, SOCKS5 URL, circuit status, bridge count, uptime.",
+        "description": "Get layered Tor health: managed process, SOCKS handshake, authenticated bootstrap state, and externally verified route.",
         "inputSchema": {"type": "object", "properties": {}},
     },
     {

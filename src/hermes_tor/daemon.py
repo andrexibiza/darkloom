@@ -14,14 +14,20 @@ Key design decisions:
 import logging
 import os
 import queue
+import secrets
 import shlex
 import signal
 import subprocess
 from hermes_tor.policy import NetworkChannel, authorize
 import threading
 import time
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
+from urllib.parse import quote
+
+import httpx
 
 from hermes_tor.constants import (
     DEFAULT_SOCKS_PORT,
@@ -35,13 +41,22 @@ from hermes_tor.bridges import Bridge
 
 logger = logging.getLogger(__name__)
 
+
+def authenticated_socks_proxy_url(socks_port: int = DEFAULT_SOCKS_PORT) -> str:
+    """Return a fresh SOCKS URL whose authentication isolates its streams."""
+    username = quote(secrets.token_urlsafe(24), safe="")
+    password = quote(secrets.token_urlsafe(32), safe="")
+    return f"socks5://{username}:{password}@127.0.0.1:{socks_port}"
+
+
 # Template with absolute paths filled at generation time.
 # No ${pt_path} — we resolve paths ourselves.
 TORRC_TEMPLATE = """\
 # hermes-tor generated torrc — {generated_at}
 # DO NOT EDIT MANUALLY — regenerated on each start.
 
-SOCKSPort {socks_port}
+# Bind locally and use SOCKS credentials as Tor circuit-isolation tokens.
+SOCKSPort 127.0.0.1:{socks_port} IsolateSOCKSAuth
 ControlPort {control_port}
 DataDirectory {data_dir}
 Log notice stdout
@@ -61,6 +76,46 @@ GeoIPv6File {geoip6_path}
 
 class TorDaemonError(Exception):
     """Raised when Tor daemon operations fail."""
+
+
+@dataclass(frozen=True)
+class IsolationIdentity:
+    """Boundaries which must not be linkable through a SOCKS circuit."""
+
+    conversation_id: str
+    agent_id: str
+    subagent_id: str | None = None
+    platform_account: str | None = None
+    browser_context: str | None = None
+    sensitive_task: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.conversation_id.strip() or not self.agent_id.strip():
+            raise ValueError("conversation_id and agent_id are required for SOCKS isolation")
+
+
+class SocksCredential:
+    """A single-use SOCKS authentication lease with best-effort zeroization."""
+
+    def __init__(self, identity: IsolationIdentity):
+        self.identity = identity
+        self._username = bytearray(secrets.token_urlsafe(24), "ascii")
+        self._password = bytearray(secrets.token_urlsafe(32), "ascii")
+        self._discarded = False
+
+    def authentication(self) -> tuple[str, str]:
+        if self._discarded:
+            raise TorDaemonError("SOCKS credential has already been discarded")
+        return self._username.decode("ascii"), self._password.decode("ascii")
+
+    def discard(self) -> None:
+        for secret in (self._username, self._password):
+            secret[:] = b"\x00" * len(secret)
+        self._discarded = True
+
+    @property
+    def discarded(self) -> bool:
+        return self._discarded
 
 
 class TorDaemon:
@@ -88,6 +143,8 @@ class TorDaemon:
         self._process: Optional[subprocess.Popen] = None
         self._torrc_path = self.data_dir / "torrc"
         self._start_time: Optional[float] = None
+        self._credential_lock = threading.Lock()
+        self._active_credentials: set[SocksCredential] = set()
 
     # ── Public API ─────────────────────────────────────────────
 
@@ -97,7 +154,50 @@ class TorDaemon:
 
     @property
     def socks_proxy_url(self) -> str:
+        """Return the listener address; do not export it as ``ALL_PROXY``."""
         return f"socks5://127.0.0.1:{self.socks_port}"
+
+    def issue_socks_credential(self, identity: IsolationIdentity) -> SocksCredential:
+        """Issue a fresh, non-reusable credential for one isolation boundary."""
+        if not isinstance(identity, IsolationIdentity):
+            raise TorDaemonError("an explicit IsolationIdentity is required")
+        credential = SocksCredential(identity)
+        with self._credential_lock:
+            self._active_credentials.add(credential)
+        return credential
+
+    def discard_socks_credential(self, credential: SocksCredential) -> None:
+        """Revoke a credential lease and erase its locally held secret bytes."""
+        with self._credential_lock:
+            if credential not in self._active_credentials:
+                raise TorDaemonError("SOCKS credential is not active")
+            self._active_credentials.remove(credential)
+        credential.discard()
+
+    @contextmanager
+    def isolated_client(
+        self, identity: IsolationIdentity | None, **client_kwargs
+    ) -> Iterator[httpx.Client]:
+        """Yield a request-scoped client, then close it and discard its identity.
+
+        Every entry creates random credentials, including repeated entries for
+        the same identity.  ``trust_env=False`` prevents environment-wide proxy
+        configuration from replacing or bypassing the isolation session.
+        """
+        if identity is None:
+            raise TorDaemonError("anonymous SOCKS clients are forbidden; assign an identity")
+        controlled_options = {"proxy", "trust_env", "mounts"}.intersection(client_kwargs)
+        if controlled_options:
+            names = ", ".join(sorted(controlled_options))
+            raise TorDaemonError(f"isolated clients control routing settings: {names}")
+        credential = self.issue_socks_credential(identity)
+        username, password = credential.authentication()
+        proxy = f"socks5://{username}:{password}@127.0.0.1:{self.socks_port}"
+        try:
+            with httpx.Client(proxy=proxy, trust_env=False, **client_kwargs) as client:
+                yield client
+        finally:
+            self.discard_socks_credential(credential)
 
     @property
     def uptime_seconds(self) -> float | None:
@@ -213,6 +313,7 @@ class TorDaemon:
     def stop(self, timeout: float = 10.0) -> None:
         """Stop the Tor daemon gracefully."""
         if not self._process:
+            self._discard_all_credentials()
             return
 
         pid = self._process.pid
@@ -234,6 +335,7 @@ class TorDaemon:
 
         self._process = None
         self._start_time = None
+        self._discard_all_credentials()
         logger.info("Tor daemon stopped")
 
     def health_check(self) -> bool:
@@ -263,6 +365,14 @@ class TorDaemon:
         return False
 
     # ── Internals ──────────────────────────────────────────────
+
+    def _discard_all_credentials(self) -> None:
+        """Discard every outstanding lease during daemon shutdown."""
+        with self._credential_lock:
+            credentials = tuple(self._active_credentials)
+            self._active_credentials.clear()
+        for credential in credentials:
+            credential.discard()
 
     def _verify_prerequisites(self):
         """Check that required files exist before starting Tor."""

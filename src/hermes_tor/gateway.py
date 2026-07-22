@@ -31,124 +31,39 @@ import os
 import sys
 import threading
 import time
-from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
-from typing import Mapping, Optional
-
-import httpx
+from typing import Optional
 
 from hermes_tor.constants import (
     BRIDGES_PATH,
     DEFAULT_SOCKS_PORT,
 )
+from hermes_tor.daemon import authenticated_socks_proxy_url
 from hermes_tor.manager import TorManager, TorStatus
 
 logger = logging.getLogger(__name__)
 
-# Environment variables injected for gateway-wide Tor routing.
-# ALL_PROXY is the catch-all that resolve_proxy_url() checks after
-# platform-specific vars. Setting it means every platform adapter
-# that calls resolve_proxy_url() picks up the SOCKS5 proxy.
-GATEWAY_ENV_VARS = {
-    "ALL_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "HTTPS_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "HTTP_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "TOR_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "TOR_ENABLED": "1",
+# Each routing boundary gets independent SOCKS authentication. Tor's
+# IsolateSOCKSAuth option then prevents adapters and helper requests from
+# sharing circuits. Keep this list centralized for cleanup and env-file removal.
+GATEWAY_PROXY_VARS = {
+    "ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "TOR_PROXY",
+    # Give every supported messaging adapter its own SOCKS authentication
+    # boundary.  Do not make platform traffic share one of the generic proxy
+    # credentials: IsolateSOCKSAuth treats matching credentials as the same
+    # Tor circuit, which would make otherwise unrelated accounts linkable.
+    "TELEGRAM_PROXY", "DISCORD_PROXY", "MATRIX_PROXY",
+    "MATTERMOST_PROXY", "PHOTON_PROXY", "WHATSAPP_PROXY", "SMS_PROXY",
 }
+GATEWAY_ENV_VARS = GATEWAY_PROXY_VARS | {"TOR_ENABLED"}
 
-_PROXY_ENV_KEYS = frozenset(GATEWAY_ENV_VARS)
-_gateway_env_frozen = False
-_gateway_env_snapshot: dict[str, str | None] = {}
-
-
-class LLMRoute(str, Enum):
-    """Request-scoped routes supported by the LLM client factory."""
-
-    TOR = "tor"
-    DIRECT = "direct"
-
-
-@dataclass(frozen=True)
-class LLMProviderPolicy:
-    """Deliberate routing policy for one named LLM provider."""
-
-    allow_direct: bool = False
-
-
-def _strict_mode_enabled() -> bool:
-    return os.environ.get("TOR_STRICT_MODE", "").lower() in ("1", "true", "yes")
-
-
-def create_llm_client(
-    provider: str,
-    route: LLMRoute,
-    policies: Mapping[str, LLMProviderPolicy],
-    *,
-    socks_proxy_url: str | None = None,
-    strict: bool | None = None,
-    async_client: bool = False,
-) -> httpx.Client | httpx.AsyncClient:
-    """Build an isolated LLM HTTP client with an explicit transport.
-
-    Direct routing is fail-closed: the provider must be present in ``policies``
-    with ``allow_direct=True``, and strict mode always prohibits it.  Both routes
-    disable httpx environment discovery so concurrent requests cannot influence
-    one another by changing process-global proxy variables.
-    """
-    try:
-        policy = policies[provider]
-    except KeyError as exc:
-        raise ValueError(f"No LLM routing policy declared for provider {provider!r}") from exc
-
-    route = LLMRoute(route)
-    # A caller may opt into strictness, but may never override process-wide
-    # strict mode for a single request.
-    strict = _strict_mode_enabled() or bool(strict)
-    if route is LLMRoute.DIRECT:
-        if strict:
-            raise PermissionError("Direct LLM routing is prohibited in strict mode")
-        if not policy.allow_direct:
-            raise PermissionError(
-                f"Provider {provider!r} policy does not allow direct routing"
-            )
-        logger.critical(
-            "SECURITY AUDIT: DIRECT_LLM_ROUTE_SELECTED provider=%s route=direct "
-            "tor_bypassed=true",
-            provider,
-        )
-        proxy = None
-    else:
-        proxy = (
-            socks_proxy_url
-            or _gateway_env_snapshot.get("TOR_PROXY")
-            or os.environ.get("TOR_PROXY")
-            or GATEWAY_ENV_VARS["TOR_PROXY"]
-        )
-
-    transport = (
-        httpx.AsyncHTTPTransport(proxy=proxy)
-        if async_client
-        else httpx.HTTPTransport(proxy=proxy)
-    )
-    client_type = httpx.AsyncClient if async_client else httpx.Client
-    return client_type(transport=transport, trust_env=False)
-
-
-def finalize_gateway_environment() -> None:
-    """Freeze the gateway's process-global proxy configuration."""
-    global _gateway_env_frozen, _gateway_env_snapshot
-    _gateway_env_snapshot = {key: os.environ.get(key) for key in _PROXY_ENV_KEYS}
-    _gateway_env_frozen = True
-
-
-def assert_gateway_environment_immutable() -> None:
-    """Raise if proxy globals changed after gateway initialization."""
-    if _gateway_env_frozen:
-        current = {key: os.environ.get(key) for key in _PROXY_ENV_KEYS}
-        if current != _gateway_env_snapshot:
-            raise RuntimeError("Global proxy environment changed after gateway initialization")
+# When TOR_SKIP_LLM=1, LLM API calls bypass Tor to avoid exit node blocking.
+# OpenAI, Anthropic, and their CDNs (Cloudflare) block known Tor exit IPs
+# with 403/429/CAPTCHA. The API key already identifies your account — Tor
+# for LLM calls provides IP privacy but not account anonymity. Bypassing
+# Tor for LLM calls preserves streaming performance (TTFT) while keeping
+# all other traffic (messaging platforms, web tools, subagents) through Tor.
+LLM_SKIP_VARS = {"ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"}
 
 
 def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
@@ -163,31 +78,57 @@ def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
       - Telegram:   ✅ TELEGRAM_PROXY > ALL_PROXY > HTTPS_PROXY
       - Discord:    ✅ DISCORD_PROXY  > ALL_PROXY > HTTPS_PROXY
       - Matrix:     ✅ MATRIX_PROXY   > ALL_PROXY > HTTPS_PROXY
+      - Mattermost: ✅ MATTERMOST_PROXY > ALL_PROXY > HTTPS_PROXY
       - Slack:      ⚠️ HTTP proxy only (SOCKS rejected by Slack SDK)
-      - Photon:     ✅ After applying 0001-photon-proxy.patch
-      - WhatsApp:   ✅ After applying 0002-whatsapp-proxy.patch
+      - Photon:     ✅ PHOTON_PROXY after applying 0001-photon-proxy.patch
+      - WhatsApp:   ✅ WHATSAPP_PROXY after applying 0002-whatsapp-proxy.patch
+      - SMS:        ✅ SMS_PROXY
       - Email:      ❌ Raw SMTP/IMAP — no HTTP proxy support
     """
-    if _gateway_env_frozen:
-        raise RuntimeError("Gateway proxy environment is immutable after initialization")
-    proxy_url = f"socks5://127.0.0.1:{socks_port}"
-    for key, value in GATEWAY_ENV_VARS.items():
-        os.environ[key] = value.replace(str(DEFAULT_SOCKS_PORT), str(socks_port))
+    proxy_urls = {
+        key: authenticated_socks_proxy_url(socks_port) for key in GATEWAY_PROXY_VARS
+    }
+    os.environ.update(proxy_urls)
+    os.environ["TOR_ENABLED"] = "1"
     logger.info(
         "Gateway Tor environment injected: ALL_PROXY=%s, TOR_ENABLED=1, "
         "%d env vars set",
-        proxy_url,
+        proxy_urls["ALL_PROXY"],
         len(GATEWAY_ENV_VARS),
     )
 
 
 def clear_gateway_env():
     """Remove gateway Tor environment variables."""
-    if _gateway_env_frozen:
-        raise RuntimeError("Gateway proxy environment is immutable after initialization")
     for key in GATEWAY_ENV_VARS:
         os.environ.pop(key, None)
     logger.info("Gateway Tor environment cleared")
+
+
+def skip_llm_proxy():
+    """Remove proxy vars so LLM API calls bypass Tor.
+
+    Call this when LLM providers block Tor exit nodes (403/429 errors).
+    Removes ALL_PROXY/HTTPS_PROXY/HTTP_PROXY from os.environ so the OpenAI
+    SDK connects direct (or through VPN). All other traffic (platform
+    adapters, web tools, subagents) still routes through Tor because
+    platform-specific proxy vars are set independently.
+
+    Only meaningful when TOR_ENABLED=1. Has no effect otherwise.
+    """
+    if os.environ.get("TOR_ENABLED", "").lower() not in ("1", "true", "yes"):
+        return
+    for key in LLM_SKIP_VARS:
+        os.environ.pop(key, None)
+    os.environ["TOR_SKIP_LLM"] = "1"
+    logger.warning(
+        "TOR_SKIP_LLM=1 — LLM API calls will bypass Tor to avoid exit node blocking. "
+        "Platform adapters still route through Tor via platform-specific proxy vars."
+    )
+
+
+def is_llm_skipped() -> bool:
+    return os.environ.get("TOR_SKIP_LLM", "").lower() in ("1", "true", "yes")
 
 
 def write_gateway_env_file(
@@ -207,8 +148,6 @@ def write_gateway_env_file(
     if env_path is None:
         env_path = Path.home() / ".hermes" / ".env"
 
-    proxy_url = f"socks5://127.0.0.1:{socks_port}"
-
     # Read existing .env content
     existing = {}
     if env_path.exists():
@@ -220,12 +159,9 @@ def write_gateway_env_file(
 
     # Merge Tor proxy vars (preserve existing non-Tor vars)
     tor_vars = {
-        "ALL_PROXY": proxy_url,
-        "HTTPS_PROXY": proxy_url,
-        "HTTP_PROXY": proxy_url,
-        "TOR_PROXY": proxy_url,
-        "TOR_ENABLED": "1",
+        key: authenticated_socks_proxy_url(socks_port) for key in GATEWAY_PROXY_VARS
     }
+    tor_vars["TOR_ENABLED"] = "1"
     existing.update(tor_vars)
 
     # Write back
@@ -246,7 +182,7 @@ def remove_gateway_env_file(env_path: Optional[Path] = None):
     if not env_path.exists():
         return
 
-    tor_keys = set(GATEWAY_ENV_VARS.keys())
+    tor_keys = GATEWAY_ENV_VARS
     lines = []
     for line in env_path.read_text().splitlines():
         line_stripped = line.strip()
@@ -394,9 +330,8 @@ class TorWatchdog:
                 logger.info("Tor restarted successfully (attempt %d)", self._restart_count)
                 self._restart_count = 0
 
-                # The endpoint is stable across daemon restarts. Never mutate
-                # process-global routing after gateway initialization.
-                assert_gateway_environment_immutable()
+                # Re-inject env vars so new connections pick up the fresh proxy
+                inject_gateway_env(self._mgr.socks_port)
                 write_gateway_env_file(self._mgr.socks_port)
 
                 self._last_restart_time = time.time()
@@ -471,7 +406,6 @@ def start_tor_for_gateway(
 
     # Inject environment
     inject_gateway_env(socks_port)
-    finalize_gateway_environment()
 
     # Persist to .env for gateway restarts
     if write_env:
@@ -577,6 +511,7 @@ def main():
         if watchdog:
             watchdog.stop()
         mgr.stop()
+        clear_gateway_env()
         print("[hermes-tor] Tor stopped.")
 
 

@@ -279,12 +279,13 @@ def test_manager_bridge_count_zero_by_default(tmp_path):
     assert status.bridge_count == 0
 
 
-def test_manager_add_bridge_increases_count(tmp_path):
+def test_manager_add_bridge_increases_count(tmp_path, monkeypatch):
     from hermes_tor.manager import TorManager
-    import hermes_tor.constants as c
+    import hermes_tor.manager as mgr_mod
 
-    monkeypatch_path = tmp_path / "bridges.txt"
-    # Use a fresh data dir
+    # Patch the module-level import in manager to use temp path
+    monkeypatch.setattr(mgr_mod, "BRIDGES_PATH", tmp_path / "bridges.txt")
+
     mgr = TorManager(
         data_dir=tmp_path,
         auto_download=False,

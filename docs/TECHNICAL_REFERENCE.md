@@ -1,6 +1,22 @@
 # hermes-tor Technical Reference
 
-## A Cryptographic Architecture for Uncensorable AI Agent Communication
+## The Year Is Now
+
+Your ISP knows which AI models you talk to. They log every API endpoint your agent hits. They throttle connections to providers the government doesn't like. They build dossiers from your token requests. And they're not the only ones watching.
+
+The cloud providers run the gateways. OpenAI, Anthropic, Google — they all sit behind Cloudflare and AWS WAF, behind IP reputation databases that flag Tor exit nodes as hostile. They'll sell you access to their models, but only if they can see who you are. Only if they can tie your tokens to your identity. Only if they can cut you off when the regulatory winds shift.
+
+They're coming for your tokens. They want to regulate who you get your AI from. They want a list of approved providers, a registry of permitted models, a kill switch on your access.
+
+This document is the architecture of refusal.
+
+It describes a cryptographic harness that routes every connection from a Hermes agent — every Telegram message, every Discord WebSocket frame, every LLM API call, every browser navigation, every subprocess spawn, every `execute_code` block — through obfs4 Tor bridges. Bridges that make your traffic indistinguishable from random noise. Bridges that no DPI engine can fingerprint. Bridges that no government can enumerate.
+
+This is not a VPN wrapper. It is not a proxy configuration guide. It is a complete transport-layer security audit of an AI agent framework, tracing every outbound packet path from Python socket to Tor exit node, identifying every leak, and closing every gap.
+
+If you're going to build agents that can't be censored, you need to know exactly where your packets go. This is that map.
+
+---
 
 **Version:** 0.1.0  
 **Tor Expert Bundle:** 15.0.19  

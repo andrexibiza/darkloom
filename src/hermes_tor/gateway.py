@@ -28,6 +28,7 @@ Or as a standalone pre-start wrapper:
 
 import logging
 import os
+import shutil
 import sys
 import threading
 import time
@@ -39,6 +40,7 @@ from hermes_tor.constants import (
     DEFAULT_SOCKS_PORT,
 )
 from hermes_tor.manager import TorManager, TorStatus
+from hermes_tor.policy import NetworkChannel, authorize, authorize_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +83,7 @@ def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
       - Email:      ❌ Raw SMTP/IMAP — no HTTP proxy support
     """
     proxy_url = f"socks5://127.0.0.1:{socks_port}"
+    authorize(NetworkChannel.GATEWAY, proxy_url=proxy_url)
     for key, value in GATEWAY_ENV_VARS.items():
         os.environ[key] = value.replace(str(DEFAULT_SOCKS_PORT), str(socks_port))
     logger.info(
@@ -109,6 +112,7 @@ def skip_llm_proxy():
 
     Only meaningful when TOR_ENABLED=1. Has no effect otherwise.
     """
+    authorize(NetworkChannel.LLM, proxy_url=None, proxy_aware=False)
     if os.environ.get("TOR_ENABLED", "").lower() not in ("1", "true", "yes"):
         return
     for key in LLM_SKIP_VARS:
@@ -345,6 +349,8 @@ class TorWatchdog:
         Falls back to daemon restart for circuit rotation.
         """
         try:
+            from hermes_tor.policy import NetworkChannel, authorize
+            authorize(NetworkChannel.TOR_CONTROL, local_only=True)
             import socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
@@ -450,6 +456,25 @@ def start_tor_for_gateway(
     return mgr
 
 
+def _is_proxy_aware_gateway_command(command: list[str]) -> bool:
+    """Return whether *command* is the installed Hermes gateway launcher.
+
+    Proxy environment variables are only meaningful for the patched Hermes
+    process.  An arbitrary native executable can ignore them, so strict mode
+    must not infer proxy support merely because this wrapper supplied env vars.
+    """
+    if len(command) < 3 or command[1:3] != ["gateway", "run"]:
+        return False
+    executable = shutil.which(command[0])
+    if executable is None:
+        return False
+    try:
+        launcher = Path(executable).read_text(encoding="utf-8", errors="ignore")
+    except (OSError, UnicodeError):
+        return False
+    return "hermes_cli" in launcher and "import main" in launcher
+
+
 # ── CLI entry point ────────────────────────────────────────────
 
 def main():
@@ -517,6 +542,7 @@ def main():
 
     # Exec the gateway
     try:
+        authorize_subprocess(proxy_aware=_is_proxy_aware_gateway_command(gateway_cmd))
         result = subprocess.run(gateway_cmd)
         sys.exit(result.returncode)
     finally:

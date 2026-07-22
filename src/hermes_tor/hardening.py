@@ -225,15 +225,30 @@ def inject_subprocess_proxy_env(env_dict: dict[str, str]) -> dict[str, str]:
 def enable_strict_mode() -> bool:
     os.environ["TOR_STRICT_MODE"] = "1"
     logger.warning("TOR_STRICT_MODE enabled; compatibility will be checked before gateway startup")
+def enable_strict_mode():
+    """Enable the centralized fail-closed policy for all wired entry points.
+
+    The policy denies unknown channels, UDP voice, SMTP, IMAP, IRC, direct HTTP,
+    raw sockets, and non-proxy-aware children before socket/process creation.
+    Only Tor bootstrap/control and proxy-aware clients are explicitly allowed.
+    """
+    from hermes_tor.policy import enable_strict_mode as _enable
+    _enable()
+    logger.warning("TOR_STRICT_MODE enabled — unapproved network operations fail closed")
     return True
 
 
 def is_strict_mode() -> bool:
-    return os.environ.get("TOR_STRICT_MODE", "").lower() in ("1", "true", "yes")
+    from hermes_tor.policy import is_strict_mode as _is_strict
+    return _is_strict()
 
 
 def check_tor_health(socks_port: int = 9050, timeout: float = 2.0) -> bool:
     """Only check that a local TCP listener exists; do not claim Tor routing."""
+    """Check if Tor SOCKS5 proxy is accepting connections."""
+    from hermes_tor.policy import NetworkChannel, authorize
+    authorize(NetworkChannel.TOR_CONTROL, local_only=True)
+    import socket
     try:
         with socket.create_connection(("127.0.0.1", socks_port), timeout=timeout):
             return True

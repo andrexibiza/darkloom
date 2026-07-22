@@ -58,10 +58,14 @@ GATEWAY_ENV_VARS = {
     "TOR_ENABLED": "1",
 }
 
-_PROXY_ENV_KEYS = frozenset(GATEWAY_ENV_VARS)
-
-# Aliased for test compatibility
-GATEWAY_PROXY_VARS = GATEWAY_ENV_VARS
+# Platform-specific proxy vars — each gets a unique SOCKS5 credential
+# for request-scoped circuit isolation via Tor's IsolateSOCKSAuth.
+GATEWAY_PROXY_VARS = frozenset({
+    "ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "TOR_PROXY",
+    "TELEGRAM_PROXY", "DISCORD_PROXY", "MATRIX_PROXY",
+    "MATTERMOST_PROXY", "PHOTON_PROXY", "WHATSAPP_PROXY", "SMS_PROXY",
+})
+_PROXY_ENV_KEYS = frozenset(GATEWAY_PROXY_VARS)
 _gateway_env_frozen = False
 _gateway_env_snapshot: dict[str, str | None] = {}
 
@@ -155,32 +159,25 @@ def assert_gateway_environment_immutable() -> None:
 
 
 def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
-    """Set ALL_PROXY + HTTPS_PROXY + HTTP_PROXY for gateway-wide Tor routing.
+    """Set per-platform SOCKS5 proxy vars for request-scoped circuit isolation.
 
-    Must be called BEFORE the Hermes gateway initializes any platform
-    connections. The gateway loads ~/.hermes/.env at startup, so
-    writing ALL_PROXY to .env is an alternative to runtime injection.
-
-    Platform adapters that use resolve_proxy_url() will automatically
-    pick up ALL_PROXY and route through Tor:
-      - Telegram:   ✅ TELEGRAM_PROXY > ALL_PROXY > HTTPS_PROXY
-      - Discord:    ✅ DISCORD_PROXY  > ALL_PROXY > HTTPS_PROXY
-      - Matrix:     ✅ MATRIX_PROXY   > ALL_PROXY > HTTPS_PROXY
-      - Slack:      ⚠️ HTTP proxy only (SOCKS rejected by Slack SDK)
-      - Photon:     ✅ After applying 0001-photon-proxy.patch
-      - WhatsApp:   ✅ After applying 0002-whatsapp-proxy.patch
-      - Email:      ❌ Raw SMTP/IMAP — no HTTP proxy support
+    Each platform gets a unique SOCKS5 credential via Tor's IsolateSOCKSAuth,
+    preventing cross-platform circuit correlation. Platform adapters
+    pick up their specific var (e.g. TELEGRAM_PROXY) via resolve_proxy_url().
     """
+    import uuid
     if _gateway_env_frozen:
         raise RuntimeError("Gateway proxy environment is immutable after initialization")
-    proxy_url = f"socks5://127.0.0.1:{socks_port}"
-    for key, value in GATEWAY_ENV_VARS.items():
-        os.environ[key] = value.replace(str(DEFAULT_SOCKS_PORT), str(socks_port))
+
+    # Every platform gets a unique SOCKS5 credential for circuit isolation
+    for key in GATEWAY_PROXY_VARS:
+        credential = uuid.uuid4().hex[:12]
+        os.environ[key] = f"socks5://{credential}@127.0.0.1:{socks_port}"
+    os.environ["TOR_ENABLED"] = "1"
+
     logger.info(
-        "Gateway Tor environment injected: ALL_PROXY=%s, TOR_ENABLED=1, "
-        "%d env vars set",
-        proxy_url,
-        len(GATEWAY_ENV_VARS),
+        "Gateway Tor environment injected: TOR_ENABLED=1, %d env vars set",
+        len(GATEWAY_PROXY_VARS),
     )
 
 
@@ -505,6 +502,14 @@ def start_tor_for_gateway(
 
 
 # ── CLI entry point ────────────────────────────────────────────
+
+def _is_proxy_aware_gateway_command(argv: list[str]) -> bool:
+    """Return True when argv looks like `hermes gateway run` or equivalent."""
+    if len(argv) < 2:
+        return False
+    exe = Path(argv[0]).name.lower()
+    return exe in ("hermes", "hermes.exe") and argv[1:3] == ["gateway", "run"]
+
 
 def main():
     """Pre-start wrapper: start Tor, then exec the gateway.

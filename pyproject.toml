@@ -19,10 +19,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-hermes_tor = ["compatibility-manifest.json"]
+hermes_tor = ["compatibility-manifest.json", "keys/*.asc"]
 
 [project.scripts]
 hermes-tor-mcp = "hermes_tor.mcp_server:serve"
-
-[tool.setuptools.package-data]
-hermes_tor = ["keys/*.asc"]

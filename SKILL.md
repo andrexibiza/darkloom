@@ -220,7 +220,8 @@ You → VPN (encrypts all traffic from your machine)
 
 ### Rotating Bridges
 
-Bridges get blocked over time. Rotate daily:
+Bridges get blocked over time. Replace them when needed through a supported
+BridgeDB workflow:
 
 ```bash
 # Manual rotation
@@ -229,12 +230,18 @@ tor_stop
 tor_start
 tor_verify
 
-# Automated rotation (daily cron job)
+# Optional automated attempt (the public BridgeDB workflow may reject it)
 hermes cron create "0 0 * * *" \
   --name "Tor Bridge Rotation" \
   --script tor_rotate_bridges.py \
   --no-agent
 ```
+
+Automated requests expose the requesting network and a recurring schedule to
+BridgeDB, creating metadata that may be correlated with later Tor use. The
+public web flow can require an interactive challenge; without an authenticated,
+supported BridgeDB automation workflow, this cron job cannot promise daily
+freshness. It retains the existing set when a response is incomplete or invalid.
 
 ### Bridge Troubleshooting
 

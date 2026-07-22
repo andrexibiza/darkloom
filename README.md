@@ -335,7 +335,7 @@ Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use `T
 
 14. **Exit nodes are unpredictable.** Tor exit nodes vary in bandwidth, latency, and geo-location. Some exit nodes are blacklisted by CDNs more aggressively than others. There is no mechanism to prefer "AI-friendly" exit nodes.
 
-15. **Bridge availability is not guaranteed.** @GetBridgesBot may rate-limit or go offline. BridgeDB may return bridges that are already blocked in certain regions. The daily cron job mitigates but cannot guarantee availability.
+15. **Bridge availability and automated freshness are not guaranteed.** @GetBridgesBot may rate-limit or go offline, and BridgeDB may return bridges that are already blocked in certain regions. Automated acquisition also reveals the requester's network and request timing to BridgeDB, which can create correlation metadata. The public web flow may require an interactive challenge, so daily freshness must not be assumed without an authenticated, supported BridgeDB automation workflow.
 
 16. **Tor network congestion can degrade to unusability.** During high-load events (DDoS attacks, network-wide censorship events), Tor circuit construction can take minutes or fail entirely. The watchdog will retry but cannot force the network to work.
 

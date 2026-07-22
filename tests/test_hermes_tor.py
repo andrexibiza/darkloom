@@ -91,6 +91,19 @@ def test_validate_bridge():
     assert validate_bridge("# comment") is False
 
 
+def test_parse_bridge_set_is_all_or_nothing():
+    from hermes_tor.bridges import parse_bridge_set
+
+    valid = (
+        "obfs4 198.51.100.1:443 "
+        "ABCDEF1234567890ABCDEF1234567890ABCDEF12 cert=xyz iat-mode=0"
+    )
+    assert len(parse_bridge_set(valid, transport="obfs4")) == 1
+
+    with pytest.raises(ValueError):
+        parse_bridge_set(f"{valid}\n<html>login required</html>", transport="obfs4")
+
+
 def test_load_bridges_from_file(tmp_path):
     from hermes_tor.bridges import load_bridges_from_file
 
@@ -120,6 +133,7 @@ def test_save_bridges_to_file(tmp_path):
     save_bridges_to_file(path, ["obfs4 1.2.3.4:443 ABCDEF"])
     content = path.read_text().strip()
     assert "obfs4 1.2.3.4:443 ABCDEF" in content
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 def test_save_bridges_append(tmp_path):

@@ -40,7 +40,9 @@ from hermes_tor.constants import (
 )
 from hermes_tor.manager import TorManager, TorStatus
 
-logger = logging.getLogger(__name__)
+from hermes_tor.privacy import get_logger
+
+logger = get_logger(__name__)
 
 # Environment variables injected for gateway-wide Tor routing.
 # ALL_PROXY is the catch-all that resolve_proxy_url() checks after
@@ -495,7 +497,7 @@ def main():
     print(f"[hermes-tor] Tor running — SOCKS5 on 127.0.0.1:{args.port}")
     print(f"[hermes-tor] ALL_PROXY injected — all gateway platforms will route through Tor")
     print(f"[hermes-tor] Self-healing watchdog active (health every 15s, circuit rotate every 10min)")
-    print(f"[hermes-tor] Launching: {' '.join(gateway_cmd)}")
+    print("[hermes-tor] Launching gateway (command arguments redacted)")
     print()
 
     # Exec the gateway

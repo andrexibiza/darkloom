@@ -14,7 +14,6 @@ Key design decisions:
 import logging
 import os
 import queue
-import shlex
 import signal
 import subprocess
 import threading
@@ -32,7 +31,9 @@ from hermes_tor.constants import (
 )
 from hermes_tor.bridges import Bridge
 
-logger = logging.getLogger(__name__)
+from hermes_tor.privacy import get_logger
+
+logger = get_logger(__name__)
 
 # Template with absolute paths filled at generation time.
 # No ${pt_path} — we resolve paths ourselves.
@@ -117,7 +118,7 @@ class TorDaemon:
         self._verify_prerequisites()
 
         cmd = [str(self.tor_binary), "-f", str(self._torrc_path)]
-        logger.info("Starting Tor: %s", shlex.join(cmd))
+        logger.info("Starting Tor with redacted command arguments")
 
         self._process = subprocess.Popen(
             cmd,
@@ -166,11 +167,8 @@ class TorDaemon:
                             remaining.append(line_queue.get_nowait())
                         except queue.Empty:
                             break
-                    full_output = "".join(l for l in remaining if l)
                     raise TorDaemonError(
-                        f"Tor exited prematurely (code {self._process.returncode}).\n"
-                        f"Last log line: {last_line}\n"
-                        f"Full output:\n{full_output[-2000:]}"
+                        f"Tor exited prematurely (code {self._process.returncode})."
                     )
 
                 # Non-blocking read from queue
@@ -180,7 +178,7 @@ class TorDaemon:
                         break
                     line = line.rstrip()
                     if line:
-                        logger.debug("Tor: %s", line)
+                        logger.debug("Tor log event received")
                         last_line = line
                         if "Bootstrapped 100%" in line:
                             bootstrapped = True
@@ -194,11 +192,8 @@ class TorDaemon:
         if not bootstrapped:
             self.stop()
             raise TorDaemonError(
-                f"Tor failed to bootstrap within {timeout}s.\n"
-                f"Last line: {last_line}\n"
-                f"Bridges configured: {len(self.bridges)}\n"
-                f"Check that your bridges are valid and not blocked.\n"
-                f"Get fresh bridges from @GetBridgesBot on Telegram."
+                f"Tor failed to bootstrap within {timeout}s; "
+                "check connectivity or replace the bridge configuration."
             )
 
         logger.info(

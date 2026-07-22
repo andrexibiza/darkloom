@@ -31,7 +31,9 @@ from typing import Any
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from hermes_tor.privacy import classify_error, get_logger, private_diagnostic, redact
+
+logger = get_logger(__name__)
 
 DEFAULT_PROXY = "socks5://127.0.0.1:9050"
 
@@ -82,7 +84,7 @@ def tor_get(url: str, use_tor: bool = True, timeout: float = 30.0, **kwargs) -> 
             "status_code": resp.status_code,
             "headers": dict(resp.headers),
             "text": resp.text,
-            "url": str(resp.url),
+            "url": redact(resp.url, redact_ips=False),
         }
 
 
@@ -105,7 +107,7 @@ def tor_post(
             "status_code": resp.status_code,
             "headers": dict(resp.headers),
             "text": resp.text,
-            "url": str(resp.url),
+            "url": redact(resp.url, redact_ips=False),
         }
 
 
@@ -129,7 +131,7 @@ def tor_request(
             "status_code": resp.status_code,
             "headers": dict(resp.headers),
             "text": resp.text,
-            "url": str(resp.url),
+            "url": redact(resp.url, redact_ips=False),
         }
 
 
@@ -140,12 +142,11 @@ def check_tor_connection(timeout: float = 30.0) -> dict:
     Parses the response to determine if traffic is routing through Tor.
 
     Returns:
-        dict with keys: tor_available, using_tor, exit_ip, error
+        dict with keys: tor_available, using_tor, error
     """
     result = {
         "tor_available": False,
         "using_tor": False,
-        "exit_ip": None,
         "error": None,
     }
 
@@ -161,18 +162,9 @@ def check_tor_connection(timeout: float = 30.0) -> dict:
         if "Congratulations" in text and "Tor" in text:
             result["using_tor"] = True
 
-        # Try to extract exit IP
-        import re
-        ip_match = re.search(
-            r"IP address appears to be:\s*<strong>([\d.]+)</strong>",
-            text,
-            re.IGNORECASE,
-        )
-        if ip_match:
-            result["exit_ip"] = ip_match.group(1)
-
     except Exception as e:
-        result["error"] = str(e)
+        private_diagnostic("proxy_http.check", e)
+        result["error"] = classify_error(e).code
 
     return result
 

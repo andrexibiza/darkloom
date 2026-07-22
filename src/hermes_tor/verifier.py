@@ -9,7 +9,9 @@ from dataclasses import dataclass
 
 import httpx
 
-logger = logging.getLogger(__name__)
+from hermes_tor.privacy import classify_error, get_logger, private_diagnostic
+
+logger = get_logger(__name__)
 
 CHECK_URL = "https://check.torproject.org/"
 
@@ -64,8 +66,10 @@ class TorVerifier:
                 resp = client.get(CHECK_URL)
                 return self._parse_response(resp.text, resp.status_code)
         except Exception as e:
-            logger.error("Verification failed: %s", e)
-            return VerificationResult(using_tor=False, error=str(e))
+            private_diagnostic("verifier", e)
+            public = classify_error(e)
+            logger.error("Verification failed: %s", public.code)
+            return VerificationResult(using_tor=False, error=public.code)
 
     async def verify_async(self) -> VerificationResult:
         """Async version for use in async contexts."""
@@ -79,8 +83,10 @@ class TorVerifier:
                 resp = await client.get(CHECK_URL)
                 return self._parse_response(resp.text, resp.status_code)
         except Exception as e:
-            logger.error("Verification failed: %s", e)
-            return VerificationResult(using_tor=False, error=str(e))
+            private_diagnostic("verifier.async", e)
+            public = classify_error(e)
+            logger.error("Verification failed: %s", public.code)
+            return VerificationResult(using_tor=False, error=public.code)
 
     @classmethod
     def _parse_response(cls, html: str, status_code: int) -> VerificationResult:

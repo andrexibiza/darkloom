@@ -38,7 +38,9 @@ from hermes_tor.bridges import (
 from hermes_tor.downloader import download_tor_binary
 from hermes_tor.verifier import TorVerifier, VerificationResult
 
-logger = logging.getLogger(__name__)
+from hermes_tor.privacy import classify_error, get_logger, private_diagnostic
+
+logger = get_logger(__name__)
 
 
 class TorState(Enum):
@@ -59,6 +61,7 @@ class TorStatus:
     bridge_count: int = 0
     exit_ip: str | None = None
     error: str | None = None
+    error_code: str | None = None
     uptime_seconds: float | None = None
 
 
@@ -180,7 +183,9 @@ class TorManager:
             return self.status()
         except Exception as e:
             self._transition(TorState.ERROR)
-            return TorStatus(state=TorState.ERROR, error=str(e))
+            private_diagnostic("manager.start", e)
+            public = classify_error(e)
+            return TorStatus(state=TorState.ERROR, error=public.message, error_code=public.code)
 
     def stop(self) -> TorStatus:
         """Stop Tor daemon gracefully."""

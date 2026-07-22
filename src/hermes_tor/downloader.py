@@ -19,7 +19,9 @@ from hermes_tor.constants import (
     is_tor_installed,
 )
 
-logger = logging.getLogger(__name__)
+from hermes_tor.privacy import get_logger
+
+logger = get_logger(__name__)
 
 
 class DownloadError(Exception):

@@ -131,10 +131,11 @@ def tor_add_bridge(bridge_line: str) -> str:
       obfs4 1.2.3.4:443 FINGERPRINT cert=... iat-mode=0
     """
     mgr = get_manager()
-    count = mgr.add_bridge(bridge_line)
+    result = mgr.add_bridge(bridge_line)
     return json.dumps({
-        "added": True,
-        "total_bridges": count,
+        "added": result.added,
+        "total_bridges": result.total_bridges,
+        "error": result.error,
         "bridges_file": str(BRIDGES_PATH),
         "hint": "Restart Tor with tor_stop + tor_start to use new bridges",
     })

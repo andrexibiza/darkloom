@@ -58,12 +58,12 @@ def test_get_lyrebird_path_exists_for_current_platform():
 def test_parse_obfs4_bridge():
     from hermes_tor.bridges import parse_bridge_line
 
-    line = "obfs4 198.51.100.1:443 ABCDEF1234567890 cert=xyz iat-mode=0"
+    line = "obfs4 198.51.100.1:443 ABCDEF1234567890ABCDEF1234567890ABCDEF12 cert=xyz iat-mode=0"
     bridge = parse_bridge_line(line)
     assert bridge is not None
     assert bridge.transport == "obfs4"
     assert bridge.address == "198.51.100.1:443"
-    assert bridge.fingerprint == "ABCDEF1234567890"
+    assert bridge.fingerprint == "ABCDEF1234567890ABCDEF1234567890ABCDEF12"
 
 
 def test_parse_vanilla_bridge():
@@ -86,7 +86,7 @@ def test_parse_bridge_ignores_comments():
 def test_validate_bridge():
     from hermes_tor.bridges import validate_bridge
 
-    assert validate_bridge("obfs4 1.2.3.4:443 ABCDEF cert=xyz iat-mode=0") is True
+    assert validate_bridge("obfs4 1.2.3.4:443 " + "A" * 40 + " cert=xyz iat-mode=0") is True
     assert validate_bridge("") is False
     assert validate_bridge("# comment") is False
 
@@ -97,13 +97,13 @@ def test_load_bridges_from_file(tmp_path):
     bridge_file = tmp_path / "bridges.txt"
     bridge_file.write_text("""
 # My bridges
-obfs4 198.51.100.1:443 ABCDEF cert=xyz iat-mode=0
-obfs4 198.51.100.2:444 FEDCBA cert=abc iat-mode=1
+obfs4 198.51.100.1:443 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA cert=xyz iat-mode=0
+obfs4 198.51.100.2:444 BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB cert=abc iat-mode=1
 """)
     bridges = load_bridges_from_file(bridge_file)
     assert len(bridges) == 2
     assert bridges[0].transport == "obfs4"
-    assert bridges[0].fingerprint == "ABCDEF"
+    assert bridges[0].fingerprint == "A" * 40
 
 
 def test_load_bridges_from_missing_file(tmp_path):
@@ -117,31 +117,31 @@ def test_save_bridges_to_file(tmp_path):
     from hermes_tor.bridges import save_bridges_to_file
 
     path = tmp_path / "bridges.txt"
-    save_bridges_to_file(path, ["obfs4 1.2.3.4:443 ABCDEF"])
+    save_bridges_to_file(path, ["obfs4 1.2.3.4:443 " + "A" * 40 + " cert=xyz iat-mode=0"])
     content = path.read_text().strip()
-    assert "obfs4 1.2.3.4:443 ABCDEF" in content
+    assert "obfs4 1.2.3.4:443 " + "A" * 40 in content
 
 
 def test_save_bridges_append(tmp_path):
     from hermes_tor.bridges import save_bridges_to_file
 
     path = tmp_path / "bridges.txt"
-    save_bridges_to_file(path, ["bridge1"])
-    save_bridges_to_file(path, ["bridge2"], append=True)
+    save_bridges_to_file(path, ["1.2.3.4:443 " + "A" * 40])
+    save_bridges_to_file(path, ["1.2.3.5:443 " + "B" * 40], append=True)
     content = path.read_text()
-    assert "bridge1" in content
-    assert "bridge2" in content
+    assert "1.2.3.4:443" in content
+    assert "1.2.3.5:443" in content
 
 
 def test_format_bridges_for_torrc():
     from hermes_tor.bridges import Bridge, format_bridges_for_torrc
 
     bridges = [
-        Bridge("obfs4", "1.2.3.4:443", "ABC", "obfs4 1.2.3.4:443 ABC"),
-        Bridge("obfs4", "5.6.7.8:80", "DEF", "obfs4 5.6.7.8:80 DEF"),
+        Bridge("vanilla", "1.2.3.4:443", "A" * 40),
+        Bridge("vanilla", "5.6.7.8:80", "B" * 40),
     ]
     lines = format_bridges_for_torrc(bridges)
-    assert lines == ["Bridge obfs4 1.2.3.4:443 ABC", "Bridge obfs4 5.6.7.8:80 DEF"]
+    assert lines == ["Bridge 1.2.3.4:443 " + "A" * 40, "Bridge 5.6.7.8:80 " + "B" * 40]
 
 
 # ── daemon tests ──────────────────────────────────────────────
@@ -163,7 +163,7 @@ def test_torrc_template_contains_required_fields(tmp_path):
     daemon = TorDaemon(
         tor_binary=fake_tor,
         data_dir=tmp_path / "data",
-        bridges=["obfs4 1.2.3.4:443 FINGERPRINT cert=xyz iat-mode=0"],
+        bridges=["obfs4 1.2.3.4:443 " + "A" * 40 + " cert=xyz iat-mode=0"],
         tor_binary_dir=tmp_path,
     )
 
@@ -289,9 +289,10 @@ def test_manager_add_bridge_increases_count(tmp_path, monkeypatch):
     mgr = TorManager(
         data_dir=tmp_path,
         auto_download=False,
-        bridges=["obfs4 1.2.3.4:443 ABCDEF"],
+        bridges=["obfs4 1.2.3.4:443 " + "A" * 40 + " cert=xyz iat-mode=0"],
     )
     assert mgr.status().bridge_count == 1
 
-    mgr.add_bridge("obfs4 5.6.7.8:80 FEDCBA")
+    result = mgr.add_bridge("obfs4 5.6.7.8:80 " + "B" * 40 + " cert=abc iat-mode=1")
+    assert result.added is True
     assert mgr.status().bridge_count == 2

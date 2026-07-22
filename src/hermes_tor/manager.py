@@ -34,6 +34,7 @@ from hermes_tor.bridges import (
     save_bridges_to_file,
     format_bridges_for_torrc,
     Bridge,
+    parse_bridge_line,
 )
 from hermes_tor.downloader import download_tor_binary
 from hermes_tor.verifier import TorVerifier, VerificationResult
@@ -60,6 +61,15 @@ class TorStatus:
     exit_ip: str | None = None
     error: str | None = None
     uptime_seconds: float | None = None
+
+
+@dataclass(frozen=True)
+class AddBridgeResult:
+    """Typed result from an attempted bridge addition."""
+
+    added: bool
+    total_bridges: int
+    error: str | None = None
 
 
 class TorManager:
@@ -93,7 +103,12 @@ class TorManager:
         self.data_dir = data_dir or DATA_DIR
         self.socks_port = socks_port
         self.control_port = control_port
-        self._bridges: list[str] = bridges or []
+        self._bridges: list[str] = []
+        for line in bridges or []:
+            bridge = parse_bridge_line(line)
+            if bridge is None:
+                raise ValueError("invalid initial bridge line")
+            self._bridges.append(bridge.line)
         self.auto_download = auto_download
 
         self._daemon: Optional[TorDaemon] = None
@@ -136,18 +151,24 @@ class TorManager:
         """
         bridge_path = path or BRIDGES_PATH
         bridges = load_bridges_from_file(bridge_path)
-        self._bridges = [b.raw for b in bridges]
+        self._bridges = [b.line for b in bridges]
         logger.info("Loaded %d bridges", len(self._bridges))
         return len(self._bridges)
 
-    def add_bridge(self, bridge_line: str) -> int:
-        """Add a single bridge line. Returns total bridge count."""
-        line = bridge_line.strip()
-        if line and line not in self._bridges:
-            self._bridges.append(line)
-            # Also persist to file
+    def add_bridge(self, bridge_line: str) -> AddBridgeResult:
+        """Validate and persist a bridge before changing in-memory state."""
+        bridge = parse_bridge_line(bridge_line)
+        if bridge is None:
+            return AddBridgeResult(False, len(self._bridges), "invalid bridge line")
+        line = bridge.line
+        if line in self._bridges:
+            return AddBridgeResult(False, len(self._bridges))
+        try:
             save_bridges_to_file(BRIDGES_PATH, [line], append=True)
-        return len(self._bridges)
+        except OSError as exc:
+            return AddBridgeResult(False, len(self._bridges), f"could not persist bridge: {exc}")
+        self._bridges.append(line)
+        return AddBridgeResult(True, len(self._bridges))
 
     def start(self, timeout: float = 60.0) -> TorStatus:
         """Start Tor daemon. Blocks until bootstrapped.

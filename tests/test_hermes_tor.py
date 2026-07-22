@@ -295,3 +295,115 @@ def test_manager_add_bridge_increases_count(tmp_path, monkeypatch):
 
     mgr.add_bridge("obfs4 5.6.7.8:80 FEDCBA")
     assert mgr.status().bridge_count == 2
+
+# ── request-scoped LLM routing tests ─────────────────────────
+
+
+def test_direct_llm_route_is_forbidden_in_strict_mode(monkeypatch):
+    from hermes_tor.gateway import (
+        LLMProviderPolicy,
+        LLMRoute,
+        create_llm_client,
+    )
+
+    monkeypatch.setenv("TOR_STRICT_MODE", "1")
+    with pytest.raises(PermissionError, match="strict mode"):
+        create_llm_client(
+            "openai",
+            LLMRoute.DIRECT,
+            {"openai": LLMProviderPolicy(allow_direct=True)},
+        )
+
+
+def test_direct_llm_route_requires_provider_policy(caplog):
+    import logging
+    from hermes_tor.gateway import LLMProviderPolicy, LLMRoute, create_llm_client
+
+    with pytest.raises(ValueError, match="No LLM routing policy"):
+        create_llm_client("unknown", LLMRoute.DIRECT, {})
+    with pytest.raises(PermissionError, match="does not allow"):
+        create_llm_client(
+            "anthropic", LLMRoute.DIRECT, {"anthropic": LLMProviderPolicy()}
+        )
+
+    with caplog.at_level(logging.CRITICAL):
+        with create_llm_client(
+            "anthropic",
+            LLMRoute.DIRECT,
+            {"anthropic": LLMProviderPolicy(allow_direct=True)},
+        ):
+            pass
+    assert "SECURITY AUDIT: DIRECT_LLM_ROUTE_SELECTED" in caplog.text
+    assert "provider=anthropic" in caplog.text
+
+
+def test_tor_llm_route_constructs_socks_transport():
+    """The default installation must include HTTPX's SOCKS dependencies."""
+    from hermes_tor.gateway import LLMProviderPolicy, LLMRoute, create_llm_client
+
+    with create_llm_client(
+        "openai",
+        LLMRoute.TOR,
+        {"openai": LLMProviderPolicy()},
+        socks_proxy_url="socks5://127.0.0.1:19050",
+    ) as client:
+        assert client._transport.__class__.__name__ == "HTTPTransport"
+
+
+def test_overlapping_llm_policy_change_cannot_change_platform_route(monkeypatch):
+    """An LLM direct-route decision must not mutate another request's proxy."""
+    import os
+    import threading
+    from hermes_tor import gateway
+
+    proxy = "socks5://127.0.0.1:19050"
+    monkeypatch.setenv("ALL_PROXY", proxy)
+    monkeypatch.setenv("HTTPS_PROXY", proxy)
+    monkeypatch.setenv("HTTP_PROXY", proxy)
+    monkeypatch.setenv("TOR_PROXY", proxy)
+    monkeypatch.setenv("TOR_ENABLED", "1")
+    monkeypatch.setattr(gateway, "_gateway_env_frozen", False)
+    gateway.finalize_gateway_environment()
+
+    barrier = threading.Barrier(2)
+    platform_routes = []
+    llm_routes = []
+
+    def platform_request():
+        barrier.wait()
+        platform_routes.append(os.environ["ALL_PROXY"])
+        barrier.wait()
+        platform_routes.append(os.environ["ALL_PROXY"])
+
+    def llm_request():
+        policies = {"openai": gateway.LLMProviderPolicy(allow_direct=False)}
+        barrier.wait()
+        policies["openai"] = gateway.LLMProviderPolicy(allow_direct=True)
+        with gateway.create_llm_client(
+            "openai", gateway.LLMRoute.DIRECT, policies, strict=False
+        ) as client:
+            llm_routes.append(client._transport.__class__.__name__)
+        barrier.wait()
+
+    threads = [threading.Thread(target=platform_request), threading.Thread(target=llm_request)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert not any(thread.is_alive() for thread in threads)
+    assert platform_routes == [proxy, proxy]
+    assert llm_routes == ["HTTPTransport"]
+    gateway.assert_gateway_environment_immutable()
+
+
+def test_gateway_environment_cannot_be_reinjected_after_initialization(monkeypatch):
+    from hermes_tor import gateway
+
+    monkeypatch.setattr(gateway, "_gateway_env_frozen", False)
+    gateway.inject_gateway_env(19051)
+    gateway.finalize_gateway_environment()
+    with pytest.raises(RuntimeError, match="immutable"):
+        gateway.inject_gateway_env(19052)
+    with pytest.raises(RuntimeError, match="immutable"):
+        gateway.clear_gateway_env()

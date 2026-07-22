@@ -20,7 +20,7 @@ Freedom of model selection — the right of every developer and every user to ch
 
 I am here to make @NousResearch an unstoppable force for good in the world.
 
-This document is the architecture of that refusal. It describes a cryptographic harness that routes every connection from a Hermes agent — every Telegram message, every Discord WebSocket frame, every LLM API call to whichever provider you freely choose, every browser navigation, every subprocess spawn, every `execute_code` block — through obfs4 Tor bridges. Bridges that make your traffic indistinguishable from random noise. Bridges that no DPI engine can fingerprint. Bridges that no government can enumerate.
+This document is how we do it. A cryptographic harness that routes every connection from a Hermes agent — every Telegram message, every Discord WebSocket frame, every LLM API call to whichever provider you freely choose, every browser navigation, every subprocess spawn, every `execute_code` block — through obfs4 Tor bridges. Bridges that make your traffic indistinguishable from random noise. Bridges that no DPI engine can fingerprint. Bridges that no government can enumerate.
 
 This is not a VPN wrapper. It is not a proxy configuration guide. It is a complete transport-layer security audit of an AI agent framework, tracing every outbound packet path from Python socket to Tor exit node, identifying every leak, and closing every gap.
 

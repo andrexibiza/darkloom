@@ -6,6 +6,41 @@ import pytest
 from pathlib import Path
 
 
+# ── gateway proxy policy tests ────────────────────────────────
+
+
+def test_gateway_policy_rejects_conflicting_platform_proxy():
+    from hermes_tor.gateway import ProxyPolicyError, establish_proxy_policy
+
+    env = {"TOR_STRICT_MODE": "1", "telegram_proxy": "direct://"}
+    with pytest.raises(ProxyPolicyError, match="disables proxy routing"):
+        establish_proxy_policy(environment=env)
+
+
+def test_gateway_policy_allows_only_loopback_no_proxy():
+    from hermes_tor.gateway import ProxyPolicyError, establish_proxy_policy
+
+    establish_proxy_policy(
+        environment={"TOR_STRICT_MODE": "1", "NO_PROXY": "localhost,127.0.0.1,::1"}
+    )
+    with pytest.raises(ProxyPolicyError, match="may contain only"):
+        establish_proxy_policy(
+            environment={"TOR_STRICT_MODE": "1", "no_proxy": "localhost,example.com"}
+        )
+
+
+def test_gateway_environment_is_restored_exactly(monkeypatch):
+    from hermes_tor.gateway import clear_gateway_env, inject_gateway_env
+
+    monkeypatch.setenv("ALL_PROXY", "previous-value")
+    monkeypatch.delenv("all_proxy", raising=False)
+    inject_gateway_env(19050)
+    assert "all_proxy" in __import__("os").environ
+    clear_gateway_env()
+    assert __import__("os").environ["ALL_PROXY"] == "previous-value"
+    assert "all_proxy" not in __import__("os").environ
+
+
 # ── constants tests ────────────────────────────────────────────
 
 

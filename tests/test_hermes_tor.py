@@ -446,6 +446,19 @@ def test_direct_llm_route_requires_provider_policy(caplog):
     assert "provider=anthropic" in caplog.text
 
 
+def test_tor_llm_route_constructs_socks_transport():
+    """The default installation must include HTTPX's SOCKS dependencies."""
+    from hermes_tor.gateway import LLMProviderPolicy, LLMRoute, create_llm_client
+
+    with create_llm_client(
+        "openai",
+        LLMRoute.TOR,
+        {"openai": LLMProviderPolicy()},
+        socks_proxy_url="socks5://127.0.0.1:19050",
+    ) as client:
+        assert client._transport.__class__.__name__ == "HTTPTransport"
+
+
 def test_overlapping_llm_policy_change_cannot_change_platform_route(monkeypatch):
     """An LLM direct-route decision must not mutate another request's proxy."""
     import os

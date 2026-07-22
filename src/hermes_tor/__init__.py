@@ -13,6 +13,20 @@ Modules:
     manager     — Unified TorManager API with state machine
     mcp_server  — MCP server (6 tools) for Hermes integration
     gateway     — Hermes gateway integration (ALL_PROXY injection)
+    policy      — Central fail-closed authorization for network entry points
 """
 
 __version__ = "0.1.0"
+
+from hermes_tor.policy import (  # noqa: E402
+    NetworkChannel,
+    NetworkPolicyError,
+    authorize,
+    enable_strict_mode,
+    is_strict_mode,
+)
+
+__all__ = [
+    "NetworkChannel", "NetworkPolicyError", "authorize",
+    "enable_strict_mode", "is_strict_mode",
+]

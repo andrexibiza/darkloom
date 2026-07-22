@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 import httpx
+from hermes_tor.policy import NetworkChannel, authorize
 
 from hermes_tor.constants import (
     get_download_url,
@@ -57,6 +58,7 @@ def download_tor_binary(
 
     try:
         # Stream download
+        authorize(NetworkChannel.TOR_BOOTSTRAP)
         with httpx.stream("GET", url, follow_redirects=True, timeout=300) as resp:
             if resp.status_code >= 400:
                 raise DownloadError(

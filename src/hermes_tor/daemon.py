@@ -17,6 +17,7 @@ import queue
 import shlex
 import signal
 import subprocess
+from hermes_tor.policy import NetworkChannel, authorize
 import threading
 import time
 from pathlib import Path
@@ -119,6 +120,7 @@ class TorDaemon:
         cmd = [str(self.tor_binary), "-f", str(self._torrc_path)]
         logger.info("Starting Tor: %s", shlex.join(cmd))
 
+        authorize(NetworkChannel.TOR_BOOTSTRAP)
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -239,6 +241,7 @@ class TorDaemon:
         if not self.is_running:
             return False
 
+        authorize(NetworkChannel.TOR_CONTROL, local_only=True)
         import socket
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

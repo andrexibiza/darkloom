@@ -38,21 +38,19 @@ from hermes_tor.constants import (
     BRIDGES_PATH,
     DEFAULT_SOCKS_PORT,
 )
+from hermes_tor.daemon import authenticated_socks_proxy_url
 from hermes_tor.manager import TorManager, TorStatus
 
 logger = logging.getLogger(__name__)
 
-# Environment variables injected for gateway-wide Tor routing.
-# ALL_PROXY is the catch-all that resolve_proxy_url() checks after
-# platform-specific vars. Setting it means every platform adapter
-# that calls resolve_proxy_url() picks up the SOCKS5 proxy.
-GATEWAY_ENV_VARS = {
-    "ALL_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "HTTPS_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "HTTP_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "TOR_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "TOR_ENABLED": "1",
+# Each routing boundary gets independent SOCKS authentication. Tor's
+# IsolateSOCKSAuth option then prevents adapters and helper requests from
+# sharing circuits. Keep this list centralized for cleanup and env-file removal.
+GATEWAY_PROXY_VARS = {
+    "ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "TOR_PROXY",
+    "TELEGRAM_PROXY", "DISCORD_PROXY", "MATRIX_PROXY",
 }
+GATEWAY_ENV_VARS = GATEWAY_PROXY_VARS | {"TOR_ENABLED"}
 
 # When TOR_SKIP_LLM=1, LLM API calls bypass Tor to avoid exit node blocking.
 # OpenAI, Anthropic, and their CDNs (Cloudflare) block known Tor exit IPs
@@ -80,13 +78,15 @@ def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
       - WhatsApp:   ✅ After applying 0002-whatsapp-proxy.patch
       - Email:      ❌ Raw SMTP/IMAP — no HTTP proxy support
     """
-    proxy_url = f"socks5://127.0.0.1:{socks_port}"
-    for key, value in GATEWAY_ENV_VARS.items():
-        os.environ[key] = value.replace(str(DEFAULT_SOCKS_PORT), str(socks_port))
+    proxy_urls = {
+        key: authenticated_socks_proxy_url(socks_port) for key in GATEWAY_PROXY_VARS
+    }
+    os.environ.update(proxy_urls)
+    os.environ["TOR_ENABLED"] = "1"
     logger.info(
         "Gateway Tor environment injected: ALL_PROXY=%s, TOR_ENABLED=1, "
         "%d env vars set",
-        proxy_url,
+        proxy_urls["ALL_PROXY"],
         len(GATEWAY_ENV_VARS),
     )
 
@@ -141,8 +141,6 @@ def write_gateway_env_file(
     if env_path is None:
         env_path = Path.home() / ".hermes" / ".env"
 
-    proxy_url = f"socks5://127.0.0.1:{socks_port}"
-
     # Read existing .env content
     existing = {}
     if env_path.exists():
@@ -154,12 +152,9 @@ def write_gateway_env_file(
 
     # Merge Tor proxy vars (preserve existing non-Tor vars)
     tor_vars = {
-        "ALL_PROXY": proxy_url,
-        "HTTPS_PROXY": proxy_url,
-        "HTTP_PROXY": proxy_url,
-        "TOR_PROXY": proxy_url,
-        "TOR_ENABLED": "1",
+        key: authenticated_socks_proxy_url(socks_port) for key in GATEWAY_PROXY_VARS
     }
+    tor_vars["TOR_ENABLED"] = "1"
     existing.update(tor_vars)
 
     # Write back
@@ -180,7 +175,7 @@ def remove_gateway_env_file(env_path: Optional[Path] = None):
     if not env_path.exists():
         return
 
-    tor_keys = set(GATEWAY_ENV_VARS.keys())
+    tor_keys = GATEWAY_ENV_VARS
     lines = []
     for line in env_path.read_text().splitlines():
         line_stripped = line.strip()

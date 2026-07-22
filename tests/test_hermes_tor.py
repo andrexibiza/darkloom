@@ -2,6 +2,8 @@
 
 Run: uv run pytest tests/ -v
 """
+import os
+
 import pytest
 from pathlib import Path
 
@@ -256,6 +258,39 @@ def test_anonymous_helpers_cannot_create_isolated_client(tmp_path):
     with pytest.raises(TorDaemonError, match="anonymous SOCKS clients are forbidden"):
         with daemon.isolated_client(None):
             pass
+
+
+@pytest.mark.parametrize("option", ["proxy", "trust_env", "mounts"])
+def test_isolated_client_rejects_routing_overrides(tmp_path, option):
+    from hermes_tor.daemon import IsolationIdentity, TorDaemonError
+
+    daemon = _daemon_for_isolation_test(tmp_path)
+    identity = IsolationIdentity("conversation-a", "agent-a")
+    with pytest.raises(TorDaemonError, match=option):
+        with daemon.isolated_client(identity, **{option: {}}):
+            pass
+
+
+def test_proxy_http_uses_fresh_authenticated_url_per_request(monkeypatch):
+    from hermes_tor.proxy_http import _get_proxy_url
+
+    monkeypatch.setenv("TOR_PROXY", "socks5://127.0.0.1:9150")
+    first = _get_proxy_url()
+    second = _get_proxy_url()
+    assert first != second
+    assert first.startswith("socks5://")
+    assert "@127.0.0.1:9150" in first
+
+
+def test_gateway_boundaries_receive_distinct_authenticated_urls(monkeypatch):
+    from hermes_tor.gateway import GATEWAY_PROXY_VARS, inject_gateway_env
+
+    for key in GATEWAY_PROXY_VARS:
+        monkeypatch.delenv(key, raising=False)
+    inject_gateway_env(9150)
+    proxy_urls = {os.environ[key] for key in GATEWAY_PROXY_VARS}
+    assert len(proxy_urls) == len(GATEWAY_PROXY_VARS)
+    assert all("@127.0.0.1:9150" in url for url in proxy_urls)
 
 
 def test_isolated_client_uses_request_credentials_and_discards_them(

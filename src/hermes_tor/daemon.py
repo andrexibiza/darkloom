@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator, Optional
+from urllib.parse import quote
 
 import httpx
 
@@ -38,6 +39,14 @@ from hermes_tor.constants import (
 from hermes_tor.bridges import Bridge
 
 logger = logging.getLogger(__name__)
+
+
+def authenticated_socks_proxy_url(socks_port: int = DEFAULT_SOCKS_PORT) -> str:
+    """Return a fresh SOCKS URL whose authentication isolates its streams."""
+    username = quote(secrets.token_urlsafe(24), safe="")
+    password = quote(secrets.token_urlsafe(32), safe="")
+    return f"socks5://{username}:{password}@127.0.0.1:{socks_port}"
+
 
 # Template with absolute paths filled at generation time.
 # No ${pt_path} — we resolve paths ourselves.
@@ -176,8 +185,10 @@ class TorDaemon:
         """
         if identity is None:
             raise TorDaemonError("anonymous SOCKS clients are forbidden; assign an identity")
-        if "proxy" in client_kwargs or "trust_env" in client_kwargs:
-            raise TorDaemonError("isolated clients control proxy and trust_env settings")
+        controlled_options = {"proxy", "trust_env", "mounts"}.intersection(client_kwargs)
+        if controlled_options:
+            names = ", ".join(sorted(controlled_options))
+            raise TorDaemonError(f"isolated clients control routing settings: {names}")
         credential = self.issue_socks_credential(identity)
         username, password = credential.authentication()
         proxy = f"socks5://{username}:{password}@127.0.0.1:{self.socks_port}"

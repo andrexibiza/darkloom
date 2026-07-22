@@ -31,6 +31,8 @@ from typing import Any
 
 import httpx
 
+from hermes_tor.daemon import authenticated_socks_proxy_url
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROXY = "socks5://127.0.0.1:9050"
@@ -42,8 +44,16 @@ def _is_tor_enabled() -> bool:
 
 
 def _get_proxy_url() -> str:
-    """Get the SOCKS5 proxy URL from environment or default."""
-    return os.environ.get("TOR_PROXY", DEFAULT_PROXY)
+    """Get the listener port and return fresh authentication for this request."""
+    from urllib.parse import urlsplit
+
+    configured = urlsplit(os.environ.get("TOR_PROXY", DEFAULT_PROXY))
+    if configured.scheme != "socks5" or configured.hostname not in {
+        "127.0.0.1",
+        "localhost",
+    }:
+        raise ValueError("TOR_PROXY must identify the local socks5 Tor listener")
+    return authenticated_socks_proxy_url(configured.port or 9050)
 
 
 def _get_transport(use_tor: bool = True):

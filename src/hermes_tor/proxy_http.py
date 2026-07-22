@@ -106,15 +106,6 @@ def tor_post(
         }
 
 
-def tor_request(
-    value = os.environ.get("TOR_PROXY")
-    if value is None:
-        return DEFAULT_PROXY
-    if not value.strip():
-        raise TorUnavailableError("TOR_PROXY must not be empty")
-    return value
-
-
 def _validated_proxy_address(proxy_url: str) -> tuple[str, int]:
     try:
         parsed = urlsplit(proxy_url)

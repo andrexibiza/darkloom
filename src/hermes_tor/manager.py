@@ -35,7 +35,11 @@ from hermes_tor.bridges import (
     format_bridges_for_torrc,
     Bridge,
 )
-from hermes_tor.downloader import download_tor_binary
+from hermes_tor.downloader import (
+    DownloadError,
+    download_tor_binary,
+    validate_installed_binary,
+)
 from hermes_tor.verifier import TorVerifier, VerificationResult
 
 logger = logging.getLogger(__name__)
@@ -89,12 +93,14 @@ class TorManager:
         control_port: int = DEFAULT_CONTROL_PORT,
         bridges: list[str] | None = None,
         auto_download: bool = True,
+        strict: bool = True,
     ):
         self.data_dir = data_dir or DATA_DIR
         self.socks_port = socks_port
         self.control_port = control_port
         self._bridges: list[str] = bridges or []
         self.auto_download = auto_download
+        self.strict = strict
 
         self._daemon: Optional[TorDaemon] = None
         self._state = TorState.STOPPED
@@ -127,6 +133,12 @@ class TorManager:
                 )
             logger.info("Tor not installed — downloading...")
             return download_tor_binary()
+        try:
+            verified = validate_installed_binary(strict=self.strict)
+        except DownloadError as exc:
+            raise TorDaemonError(f"Tor installation failed authentication: {exc}") from exc
+        if not verified:
+            logger.warning("Using an unverified legacy Tor installation (strict=False)")
         return get_tor_binary_path()
 
     def load_bridges(self, path: Path | None = None) -> int:

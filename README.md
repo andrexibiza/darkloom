@@ -55,6 +55,8 @@ This is not a VPN wrapper. It is not a proxy configuration guide. It is a comple
 
 If you're going to build agents that the balkanizers can't touch, you need to know exactly where your packets go. **This is that map.**
 
+**Status:** My own Hermes instance is already running this in production. Every platform adapter, every subagent, every tool call — routed through Tor bridges right now. Improvements imminent. This is not a whitepaper. This is running code.
+
 ---
 
 ## Quick Start

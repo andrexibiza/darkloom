@@ -500,6 +500,12 @@ WhiskeySockets. (n.d.). *Baileys: Lightweight full-featured WhatsApp Web + Multi
 
 ---
 
+## Provenance
+
+Every claim in this document links to its primary source. The source code is at [`src/hermes_tor/`](https://github.com/andrexibiza/hermes-tor/tree/main/src/hermes_tor). 24 tests at [`tests/`](https://github.com/andrexibiza/hermes-tor/blob/main/tests/test_hermes_tor.py). Three patch files at [`patches/`](https://github.com/andrexibiza/hermes-tor/tree/main/patches) for Hermes-agent core. 11 auditable commits in the [commit history](https://github.com/andrexibiza/hermes-tor/commits/main). The hardening audit runs with `python -m hermes_tor.hardening audit`. The Hermes-agent source lines verified are linked inline above. Tested end-to-end on Windows 10: Tor 15.0.19 bootstrapped in 4.5s, `check.torproject.org` confirmed routing through Tor with exit IP `185.220.101.6`.
+
+---
+
 ## License
 
 MIT License — Copyright (c) 2026 Andrex Ibiza (Axl Ibiza)

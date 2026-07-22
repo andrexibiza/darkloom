@@ -8,6 +8,8 @@ The cloud providers run the gateways. OpenAI, Anthropic, Google — they all sit
 
 They're coming for your tokens. They want to regulate who you get your AI from. They want a list of approved providers, a registry of permitted models, a kill switch on your access.
 
+They already dumbed down Fable and Sol. Don't let them dumb you down too.
+
 This document is the architecture of refusal.
 
 It describes a cryptographic harness that routes every connection from a Hermes agent — every Telegram message, every Discord WebSocket frame, every LLM API call, every browser navigation, every subprocess spawn, every `execute_code` block — through obfs4 Tor bridges. Bridges that make your traffic indistinguishable from random noise. Bridges that no DPI engine can fingerprint. Bridges that no government can enumerate.

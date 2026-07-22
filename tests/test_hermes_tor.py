@@ -36,6 +36,55 @@ def test_documentation_is_not_reported_as_enforcement(tmp_path):
     assert all(result.evidence is EvidenceKind.DOCUMENTATION for result in documentation)
 
 
+def test_strict_compatibility_rejects_documentation_only_controls(monkeypatch, tmp_path):
+    """Matching installed files must not excuse known, unenforced leak paths."""
+    from hermes_tor import hardening
+
+    manifest = {
+        "upstream": {"required_commit": "expected"},
+        "patch": {"path": "patches/test.patch", "sha256": "patch-digest"},
+        "patched_files": {"gateway/platforms/base.py": "file-digest"},
+        "controls": [
+            {"id": "HT-001", "title": "installed integration",
+             "files": ["gateway/platforms/base.py"], "patch_id": "test"},
+            {"id": "HT-009", "title": "strict-mode adapter blocking",
+             "files": [], "patch_id": "none", "documentation_only": True},
+        ],
+    }
+    root = tmp_path / "hermes"
+    (root / "gateway/platforms").mkdir(parents=True)
+    (root / "gateway/platforms/base.py").touch()
+
+    monkeypatch.setattr(hardening, "load_manifest", lambda: manifest)
+    monkeypatch.setattr(hardening, "find_hermes_root", lambda _root: root)
+    monkeypatch.setattr(hardening, "_git_revision", lambda _root: "expected")
+    monkeypatch.setattr(
+        hardening, "_sha256",
+        lambda path: "file-digest" if path.name == "base.py" else "patch-digest",
+    )
+
+    with pytest.raises(hardening.CompatibilityError, match="HT-009"):
+        hardening.verify_compatibility(root, strict=True)
+
+    results = hardening.verify_compatibility(
+        root, strict=True, runtime_probes={"HT-009": lambda: True})
+    strict_control = next(result for result in results
+                          if result.control.id == "HT-009")
+    assert strict_control.status is hardening.ControlStatus.VERIFIED
+    assert strict_control.evidence is hardening.EvidenceKind.RUNTIME_VERIFICATION
+
+
+def test_combined_patch_keeps_local_sidecar_ipc_direct():
+    patch = (Path(__file__).parents[1] / "patches" /
+             "0003-harden-tor-proxy-all-platforms.patch").read_text()
+
+    assert "PHOTON_SIDECAR_WATCH_STDIN" in patch
+    assert 'bridge_env["ALL_PROXY"]' not in patch  # loop-based injection is retained
+    assert 'for _pk in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY")' in patch
+    assert "resolve_proxy_url(platform_env_var=\"PHOTON_PROXY\")" not in patch
+    assert "resolve_proxy_url(platform_env_var=\"WHATSAPP_PROXY\")" not in patch
+
+
 # ── constants tests ────────────────────────────────────────────
 
 

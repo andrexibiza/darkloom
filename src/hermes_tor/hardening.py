@@ -132,6 +132,20 @@ def verify_compatibility(
             result = ControlResult(control, ControlStatus.UNVERIFIED,
                                    EvidenceKind.DOCUMENTATION,
                                    "limitation documented; no enforcement is claimed")
+            probe = (runtime_probes or {}).get(control.id)
+            if probe is not None:
+                try:
+                    passed = probe() is True
+                except Exception as exc:
+                    result = ControlResult(control, ControlStatus.UNVERIFIED,
+                                           EvidenceKind.DOCUMENTATION,
+                                           f"runtime probe failed: {exc}")
+                else:
+                    if passed:
+                        result = ControlResult(
+                            control, ControlStatus.VERIFIED,
+                            EvidenceKind.RUNTIME_VERIFICATION,
+                            "caller-supplied runtime probe confirmed the unsafe feature is disabled")
         elif root is None or not revision_ok:
             detail = "Hermes installation not found" if root is None else (
                 f"Hermes revision {revision or 'unknown'} != required {control.hermes_revision}")
@@ -165,8 +179,12 @@ def verify_compatibility(
 
         results.append(result)
 
-    incompatible = [r for r in results if not r.control.documentation_only and
-                    r.status in (ControlStatus.UNVERIFIED, ControlStatus.PATCH_ONLY)]
+    # Strict mode is fail-closed for every declared control.  In particular,
+    # documentation-only leak controls describe known escape hatches; excluding
+    # them here would turn an acknowledged lack of enforcement into permission
+    # to start Hermes.
+    incompatible = [r for r in results
+                    if r.status in (ControlStatus.UNVERIFIED, ControlStatus.PATCH_ONLY)]
     if strict and incompatible:
         summary = "; ".join(f"{r.control.id}: {r.detail}" for r in incompatible)
         raise CompatibilityError(f"strict mode rejected incompatible Hermes integration: {summary}")

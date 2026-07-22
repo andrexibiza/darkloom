@@ -18,6 +18,7 @@ from pathlib import Path
 
 from hermes_tor.manager import TorManager, TorState
 from hermes_tor.constants import BRIDGES_PATH
+from hermes_tor.policy import NetworkChannel, authorize
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,7 @@ def tor_download() -> str:
     One-time setup. Downloads ~22-32MB. Subsequent calls return
     immediately if already installed.
     """
+    authorize(NetworkChannel.TOR_BOOTSTRAP)
     mgr = get_manager()
     try:
         path = mgr.ensure_installed()
@@ -63,6 +65,7 @@ def tor_start(socks_port: int = 9050, timeout: float = 60.0) -> str:
     Get bridges from @GetBridgesBot on Telegram, then use
     tor_add_bridge to configure them before starting.
     """
+    authorize(NetworkChannel.TOR_BOOTSTRAP)
     mgr = get_manager()
     mgr.socks_port = socks_port
     mgr.load_bridges()
@@ -107,6 +110,7 @@ def tor_verify() -> str:
     and reports whether the exit node is a Tor relay.
     """
     mgr = get_manager()
+    authorize(NetworkChannel.MCP, proxy_url=mgr.socks_proxy_url)
     result = mgr.verify()
     return json.dumps({
         "using_tor": result.using_tor,

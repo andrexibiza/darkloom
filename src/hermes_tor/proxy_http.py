@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 
 import httpx
 
+from hermes_tor.policy import NetworkChannel, authorize
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROXY = "socks5://127.0.0.1:9050"
@@ -35,6 +37,76 @@ def _require_tor_enabled() -> None:
 
 
 def _get_proxy_url() -> str:
+    """Get the SOCKS5 proxy URL from environment or default."""
+    return os.environ.get("TOR_PROXY", DEFAULT_PROXY)
+
+
+def _get_transport(use_tor: bool = True):
+    """Return a SOCKS5 transport if Tor is enabled, None for direct connection.
+
+    Uses httpx.HTTPTransport with socks5 proxy. socksio is already
+    installed in the Hermes venv — it handles the SOCKS protocol
+    without additional dependencies.
+    """
+    proxy_url = _get_proxy_url() if use_tor and _is_tor_enabled() else None
+    authorize(NetworkChannel.HTTP, proxy_url=proxy_url, proxy_aware=proxy_url is not None)
+    if proxy_url:
+        return httpx.HTTPTransport(proxy=proxy_url)
+    return None
+
+
+def tor_get(url: str, use_tor: bool = True, timeout: float = 30.0, **kwargs) -> dict:
+    """HTTP GET through Tor (or direct if Tor disabled).
+
+    Args:
+        url: Target URL.
+        use_tor: If False, always use direct connection.
+        timeout: Request timeout in seconds.
+        **kwargs: Passed to httpx.Client.get().
+
+    Returns:
+        dict with status_code, text, headers, url keys.
+    """
+    transport = _get_transport(use_tor)
+    with httpx.Client(
+        transport=transport,
+        timeout=timeout,
+        follow_redirects=True,
+    ) as client:
+        resp = client.get(url, **kwargs)
+        resp.raise_for_status()
+        return {
+            "status_code": resp.status_code,
+            "headers": dict(resp.headers),
+            "text": resp.text,
+            "url": str(resp.url),
+        }
+
+
+def tor_post(
+    url: str,
+    use_tor: bool = True,
+    timeout: float = 30.0,
+    **kwargs,
+) -> dict:
+    """HTTP POST through Tor (or direct if Tor disabled)."""
+    transport = _get_transport(use_tor)
+    with httpx.Client(
+        transport=transport,
+        timeout=timeout,
+        follow_redirects=True,
+    ) as client:
+        resp = client.post(url, **kwargs)
+        resp.raise_for_status()
+        return {
+            "status_code": resp.status_code,
+            "headers": dict(resp.headers),
+            "text": resp.text,
+            "url": str(resp.url),
+        }
+
+
+def tor_request(
     value = os.environ.get("TOR_PROXY")
     if value is None:
         return DEFAULT_PROXY

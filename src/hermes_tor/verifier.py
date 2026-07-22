@@ -8,6 +8,7 @@ import re
 from dataclasses import dataclass
 
 import httpx
+from hermes_tor.policy import NetworkChannel, authorize
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class TorVerifier:
     def verify(self) -> VerificationResult:
         """Check if HTTP traffic routes through Tor. Synchronous."""
         try:
+            authorize(NetworkChannel.HTTP, proxy_url=self.socks_proxy_url)
             transport = httpx.HTTPTransport(proxy=self.socks_proxy_url)
             with httpx.Client(
                 transport=transport,
@@ -70,6 +72,7 @@ class TorVerifier:
     async def verify_async(self) -> VerificationResult:
         """Async version for use in async contexts."""
         try:
+            authorize(NetworkChannel.HTTP, proxy_url=self.socks_proxy_url)
             transport = httpx.AsyncHTTPTransport(proxy=self.socks_proxy_url)
             async with httpx.AsyncClient(
                 transport=transport,

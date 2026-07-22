@@ -137,9 +137,7 @@ def download_tor_binary(progress_callback=None, force: bool = False) -> Path:
             staged_binary = staging / relative_binary
             if not staged_binary.is_file():
                 raise DownloadError(f"Tor binary not found in authenticated archive at {relative_binary}")
-            if TOR_BINARY_DIR.exists():
-                shutil.rmtree(TOR_BINARY_DIR)
-            shutil.move(str(staging), TOR_BINARY_DIR)
+            _atomic_install(staging, TOR_BINARY_DIR)
             binary = get_tor_binary_path()
             if os.name != "nt":
                 binary.chmod(0o755)

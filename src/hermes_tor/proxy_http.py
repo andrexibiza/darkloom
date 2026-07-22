@@ -1,10 +1,8 @@
 """Proxy-aware HTTP helpers for Hermes execute_code blocks.
 
 These functions create httpx clients with SOCKS5 transports when
-TOR_ENABLED=1 is set in the environment. When Tor is disabled or
-unavailable, they fall back to direct connections.
-
-socksio is already installed in the Hermes venv — no extra deps needed.
+TOR_ENABLED=1 is set in the environment. A missing SOCKS backend fails
+closed; it never causes a direct retry.
 
 Usage in an execute_code block:
 
@@ -31,6 +29,8 @@ from typing import Any
 
 import httpx
 
+from hermes_tor.socks_support import require_socks_support
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROXY = "socks5://127.0.0.1:9050"
@@ -49,11 +49,11 @@ def _get_proxy_url() -> str:
 def _get_transport(use_tor: bool = True):
     """Return a SOCKS5 transport if Tor is enabled, None for direct connection.
 
-    Uses httpx.HTTPTransport with socks5 proxy. socksio is already
-    installed in the Hermes venv — it handles the SOCKS protocol
-    without additional dependencies.
+    Uses httpx.HTTPTransport with a SOCKS5 proxy. The declared
+    ``httpx[socks]`` dependency supplies the required socksio backend.
     """
     if use_tor and _is_tor_enabled():
+        require_socks_support(_get_proxy_url())
         return httpx.HTTPTransport(proxy=_get_proxy_url())
     return None
 

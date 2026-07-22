@@ -279,6 +279,47 @@ def test_manager_bridge_count_zero_by_default(tmp_path):
     assert status.bridge_count == 0
 
 
+def test_socks_capability_check_constructs_transports_without_request():
+    from hermes_tor.socks_support import require_socks_support
+
+    # An unused local port proves construction does not need a live proxy.
+    require_socks_support("socks5://127.0.0.1:1")
+
+
+def test_socks_capability_error_is_stable_and_fail_closed(monkeypatch):
+    import hermes_tor.socks_support as support
+
+    def unavailable(**kwargs):
+        raise ImportError("variable backend detail")
+
+    monkeypatch.setattr(support.httpx, "HTTPTransport", unavailable)
+    with pytest.raises(support.SocksSupportError) as exc:
+        support.require_socks_support()
+    assert str(exc.value) == support.SOCKS_SUPPORT_ERROR
+    assert "Direct fallback is disabled" in str(exc.value)
+
+
+def test_manager_checks_socks_support_before_install(tmp_path, monkeypatch):
+    import hermes_tor.manager as manager_module
+    from hermes_tor.manager import TorManager, TorState
+    from hermes_tor.socks_support import SOCKS_SUPPORT_ERROR, SocksSupportError
+
+    def unavailable(proxy_url):
+        raise SocksSupportError(SOCKS_SUPPORT_ERROR)
+
+    monkeypatch.setattr(manager_module, "require_socks_support", unavailable)
+    manager = TorManager(data_dir=tmp_path, auto_download=False)
+    monkeypatch.setattr(
+        manager,
+        "ensure_installed",
+        lambda: pytest.fail("installation must not run without SOCKS support"),
+    )
+
+    status = manager.start()
+    assert status.state is TorState.ERROR
+    assert status.error == SOCKS_SUPPORT_ERROR
+
+
 def test_manager_add_bridge_increases_count(tmp_path, monkeypatch):
     from hermes_tor.manager import TorManager
     import hermes_tor.manager as mgr_mod

@@ -37,6 +37,7 @@ from hermes_tor.bridges import (
 )
 from hermes_tor.downloader import download_tor_binary
 from hermes_tor.verifier import TorVerifier, VerificationResult
+from hermes_tor.socks_support import require_socks_support
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,9 @@ class TorManager:
             )
 
         try:
+            # Validate the client-side transport before downloading or starting
+            # Tor. This is a local check and cannot accidentally connect direct.
+            require_socks_support(f"socks5://127.0.0.1:{self.socks_port}")
             tor_binary = self.ensure_installed()
             self._daemon = TorDaemon(
                 tor_binary=tor_binary,

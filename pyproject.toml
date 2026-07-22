@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Micro-TOR client for Hermes agents — bridge-backed anonymous routing via SOCKS5"
 requires-python = ">=3.11"
 dependencies = [
-    "httpx>=0.28",
+    # The socks extra is required: plain httpx does not install socksio.
+    "httpx[socks]>=0.28,<0.29",
 ]
 
 [project.optional-dependencies]

@@ -297,11 +297,11 @@ register(
     "Documented mitigation: route LLM calls through VPN-only (bypass Tor) while "
     "keeping all other traffic through Tor. The LLM API key already identifies "
     "your account — Tor adds IP privacy but not account anonymity for API calls. "
-    "Set TOR_SKIP_LLM=1 to route LLM calls direct (or through VPN) while "
-    "everything else goes through Tor. For truly anonymous LLM access, use "
+    "Non-strict deployments may use a request-scoped client only when an explicit "
+    "per-provider policy allows direct routing. For truly anonymous LLM access, use "
     "providers that don't block Tor (local models, some open-source endpoints) "
     "or route through a non-exit-node SOCKS5 proxy chain.",
-    "Verify: attempt an API call through Tor — if blocked, enable TOR_SKIP_LLM=1",
+    "Verify: direct routing is rejected unless the provider policy opts in",
     "hermes_tor/gateway.py, SKILL.md"
 )
 
@@ -337,7 +337,7 @@ register(
     "For latency-sensitive workloads (streaming chat, real-time voice), "
     "consider VPN-only routing. For batch workloads (subagent research, "
     "scheduled tasks, data extraction), Tor overhead is negligible. "
-    "TOR_SKIP_LLM=1 routes LLM streaming through VPN-only to preserve TTFT.",
+    "A policy-approved request-scoped direct client can preserve TTFT in non-strict mode.",
     "Measure: compare TTFT with and without Tor using the same provider/model",
     "All network paths (documentation)"
 )

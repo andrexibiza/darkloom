@@ -127,7 +127,7 @@ An adversarial code review traced every outbound connection path — every subpr
 | LEAK-12 | 📄 DOCUMENTED | Email SMTP/IMAP — Python [smtplib](https://docs.python.org/3/library/smtplib.html)/[imaplib](https://docs.python.org/3/library/imaplib.html) don't support SOCKS5 |
 | LEAK-13 | 📄 DOCUMENTED | IRC — raw TCP sockets |
 | LEAK-14 | 📄 DOCUMENTED | Import-time network calls — audited, no leaks in major adapters |
-| LEAK-15 | 📄 DOCUMENTED | LLM exit node hostility — providers block Tor IPs (403/429); use `TOR_SKIP_LLM=1` [[Cloudflare Bot Management]](https://www.cloudflare.com/products/bot-management/) |
+| LEAK-15 | 📄 DOCUMENTED | LLM exit node hostility — providers block Tor IPs (403/429); use an audited per-provider direct-routing policy in non-strict mode [[Cloudflare Bot Management]](https://www.cloudflare.com/products/bot-management/) |
 | LEAK-16 | 📄 DOCUMENTED | execute_code system binary leaks — git/curl/pip bypass proxy; use [torsocks](https://gitlab.torproject.org/tpo/core/torsocks) on Linux |
 | LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — tradeoff for censorship resistance [[Tor Metrics]](https://metrics.torproject.org/) |
 
@@ -144,7 +144,7 @@ Following the taxonomy in ["Tor: The Second-Generation Onion Router"](https://sv
 | Adversary | Capability | Goal | Mitigation |
 |-----------|-----------|------|------------|
 | **ISP-level** | DPI, IP blocking, traffic shaping | Identify and block AI API traffic | [obfs4 bridges](https://github.com/Yawning/obfs4/blob/master/doc/obfs4-spec.txt) — traffic indistinguishable from random noise (§4.2) |
-| **Provider-level** | API key identification, Tor exit node IP blocking | Prevent anonymous model access | VPN → Tor layering; `TOR_SKIP_LLM=1` bypasses exit node blocking |
+| **Provider-level** | API key identification, Tor exit node IP blocking | Prevent anonymous model access | VPN → Tor layering; audited request-scoped routing in non-strict mode |
 | **Correlation** | Traffic timing analysis across vantage points | Link identity to agent activity | 10-minute circuit rotation via [NEWNYM signal](https://github.com/torproject/torspec/blob/main/control-spec.txt) (§3.7) |
 
 ### Cryptographic Stack
@@ -241,9 +241,9 @@ import os; os.environ['TOR_ENABLED'] = '1'
 from hermes_tor.proxy_http import tor_get, tor_post
 data = tor_get("https://httpbin.org/ip")
 
-# LLM exit node hostility mitigation
-from hermes_tor.gateway import skip_llm_proxy
-skip_llm_proxy()  # Removes ALL_PROXY for LLM calls, everything else stays through Tor
+# LLM clients use explicit, request-scoped transports
+from hermes_tor.gateway import create_llm_client, LLMProviderPolicy, LLMRoute
+client = create_llm_client('example', LLMRoute.TOR, {'example': LLMProviderPolicy()})
 ```
 
 ---
@@ -278,7 +278,7 @@ Step 3: Hermes gateway inherits ALL_PROXY
 OpenAI, Anthropic, and their CDNs (Cloudflare, AWS WAF) block Tor exit nodes ([Cloudflare Bot Management](https://www.cloudflare.com/products/bot-management/)). Expected: HTTP 403, 429, or CAPTCHA.
 
 **Mitigations:**
-- `TOR_SKIP_LLM=1` — LLM calls bypass Tor while platform traffic stays protected
+- Direct LLM routing — non-strict only, per-provider opt-in, with a critical audit event
 - VPN → Tor → LLM — provider sees VPN IP, not Tor exit IP
 - Tor-friendly providers — OpenRouter, local models, some open-source endpoints
 
@@ -291,7 +291,7 @@ OpenAI, Anthropic, and their CDNs (Cloudflare, AWS WAF) block Tor exit nodes ([C
 | Tor (obfs4 bridges) | +450-1800ms |
 | VPN → Tor | +550-2300ms |
 
-Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use `TOR_SKIP_LLM=1` for streaming chat.
+Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use an explicitly approved request-scoped direct transport in non-strict mode for streaming chat.
 
 ### execute_code System Binary Leaks
 

@@ -41,6 +41,7 @@ from urllib.parse import urlsplit
 from hermes_tor.constants import (
     BRIDGES_PATH,
     DEFAULT_SOCKS_PORT,
+    is_tor_installed,
 )
 if TYPE_CHECKING:
     from hermes_tor.manager import TorManager
@@ -138,8 +139,24 @@ def establish_proxy_policy(
     return policy
 
 
-def _policy_environment(policy: ProxyPolicy) -> dict[str, str]:
+def _is_http_proxy(value: str) -> bool:
+    """Return whether a proxy URL is suitable for HTTP-only integrations."""
+    parsed = urlsplit(value.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+
+
+def _policy_environment(
+    policy: ProxyPolicy, environment: Optional[Mapping[str, str]] = None
+) -> dict[str, str]:
     values = {name: policy.url for name in PROXY_ENV_VARS}
+    # Slack's SDK rejects SOCKS URLs. In non-strict mode, retain an explicitly
+    # configured HTTP-to-SOCKS bridge (for example, a local Privoxy instance)
+    # rather than replacing it with the generic Tor SOCKS endpoint.
+    env = os.environ if environment is None else environment
+    if not policy.strict:
+        for name in ("SLACK_PROXY", "slack_proxy"):
+            if name in env and _is_http_proxy(env[name]):
+                values[name] = env[name]
     values.update({"TOR_PROXY": policy.url, "tor_proxy": policy.url, "TOR_ENABLED": "1"})
     # Preserve loopback-only communication with local gateway sidecars.
     bypass = ",".join(policy.loopback_bypass)
@@ -301,7 +318,9 @@ def write_gateway_env_file(
                 existing[key.strip()] = value.strip()
 
     # Merge Tor proxy vars (preserve existing non-Tor vars)
-    tor_vars = _policy_environment(ProxyPolicy(proxy_url, strict=False))
+    tor_vars = _policy_environment(
+        ProxyPolicy(proxy_url, strict=False), environment=existing
+    )
     existing.update(tor_vars)
 
     # Write back
@@ -529,9 +548,21 @@ def start_tor_for_gateway(
     # Freeze and validate routing before importing TorManager: its downloader
     # is the first module in this path which imports an HTTP network client.
     policy = establish_proxy_policy(socks_port)
+    if policy.strict and not is_tor_installed():
+        raise ProxyPolicyError(
+            "strict mode requires a preinstalled Tor binary; run "
+            "`hermes-tor download` before enabling TOR_STRICT_MODE"
+        )
+
+    # Environment variables alone are not a verifiable transport. None of the
+    # gateway platform adapters are constructed in this package, so strict mode
+    # must reject them until each adapter is wired to an explicit proxy client.
+    require_verified_proxy_clients(
+        policy, *(name.removesuffix("_PROXY").lower() for name in _PLATFORM_PROXY_NAMES)
+    )
     from hermes_tor.manager import TorManager
 
-    mgr = TorManager(auto_download=True, socks_port=socks_port)
+    mgr = TorManager(auto_download=not policy.strict, socks_port=socks_port)
 
     # Load bridges if available
     bridge_count = mgr.load_bridges()

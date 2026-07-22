@@ -41,6 +41,39 @@ def test_gateway_environment_is_restored_exactly(monkeypatch):
     assert "all_proxy" not in __import__("os").environ
 
 
+def test_gateway_preserves_slack_http_bridge(monkeypatch):
+    from hermes_tor.gateway import clear_gateway_env, inject_gateway_env
+
+    bridge = "http://127.0.0.1:8118"
+    monkeypatch.setenv("SLACK_PROXY", bridge)
+    inject_gateway_env(19050)
+    assert __import__("os").environ["SLACK_PROXY"] == bridge
+    assert __import__("os").environ["ALL_PROXY"] == "socks5://127.0.0.1:19050"
+    clear_gateway_env()
+
+
+def test_strict_gateway_requires_preinstalled_tor(monkeypatch):
+    import hermes_tor.gateway as gateway
+
+    for name in (*gateway.PROXY_ENV_VARS, *gateway.NO_PROXY_ENV_VARS):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TOR_STRICT_MODE", "1")
+    monkeypatch.setattr(gateway, "is_tor_installed", lambda: False)
+    with pytest.raises(gateway.ProxyPolicyError, match="preinstalled Tor binary"):
+        gateway.start_tor_for_gateway(write_env=False)
+
+
+def test_strict_gateway_rejects_unverified_platform_clients(monkeypatch):
+    import hermes_tor.gateway as gateway
+
+    for name in (*gateway.PROXY_ENV_VARS, *gateway.NO_PROXY_ENV_VARS):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("TOR_STRICT_MODE", "1")
+    monkeypatch.setattr(gateway, "is_tor_installed", lambda: True)
+    with pytest.raises(gateway.ProxyPolicyError, match="discord.*slack|slack.*discord"):
+        gateway.start_tor_for_gateway(write_env=False)
+
+
 # ── constants tests ────────────────────────────────────────────
 
 

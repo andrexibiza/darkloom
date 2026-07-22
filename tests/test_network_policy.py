@@ -136,9 +136,38 @@ def test_hermes_patch_guards_every_declared_network_entry_point():
         "SMTP": "authorize_raw_socket(NetworkChannel.SMTP)",
         "IMAP": "authorize_raw_socket(NetworkChannel.IMAP)",
         "IRC": "authorize_raw_socket(NetworkChannel.IRC)",
+        "Slack": "return authorized(proxy_url)",
+        "execute_code": "execute_code process boundary before Popen",
     }
     for entry_point, guard in required_guards.items():
         assert guard in patch, f"missing policy guard for {entry_point}"
+
+
+def test_hermes_patch_does_not_trust_ambient_proxy_for_children():
+    patch = (Path(__file__).parents[1] / "patches" /
+             "0004-central-network-policy-fail-closed.patch").read_text()
+
+    assert 'if config.get("command") and not config.get("url"):' in patch
+    assert patch.count("authorize_subprocess(proxy_aware=False") >= 2
+    assert "execute_code process boundary before Popen" in patch
+
+
+def test_hermes_patch_installs_llm_proxy_and_disables_webrtc_udp():
+    patch = (Path(__file__).parents[1] / "patches" /
+             "0004-central-network-policy-fail-closed.patch").read_text()
+
+    assert 'for proxy_var in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY")' in patch
+    assert "proxy_aware=proxy_installed" in patch
+    assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in patch
+
+
+def test_slack_unsupported_proxy_is_a_strict_mode_denial():
+    patch = (Path(__file__).parents[1] / "patches" /
+             "0004-central-network-policy-fail-closed.patch").read_text()
+    slack_hunk = patch[patch.index("diff --git a/plugins/platforms/slack/adapter.py"):]
+
+    assert "return authorized(None)" in slack_hunk
+    assert "proxy_aware=proxy is not None" in slack_hunk
 
 
 @pytest.mark.parametrize("constructor", [

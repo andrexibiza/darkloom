@@ -295,7 +295,7 @@ Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use `T
 
 ### execute_code System Binary Leaks
 
-`ALL_PROXY` is a convention, not enforcement. `git`, `curl`, `pip`, compiled tools use the raw network stack. Linux: `torsocks curl ...` (LD_PRELOAD). Windows: no equivalent — use `execute_code` + `proxy_http` instead.
+`ALL_PROXY` is a convention, not enforcement. `git`, `curl`, `pip`, and compiled tools may use the raw network stack. Strict mode therefore denies the `execute_code` child at its launch boundary; use audited Hermes HTTP tools backed by `proxy_http` instead. Outside strict mode, Linux users may explicitly run `torsocks curl ...` (LD_PRELOAD); Windows has no equivalent.
 
 ---
 
@@ -323,13 +323,13 @@ Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use `T
 
 9. **No circuit isolation between subagents.** All subagents share the same Tor circuit (same SOCKS5 port). An adversary who compromises one subagent can potentially correlate traffic with other subagents. Stem's ControlPort interface could assign different SOCKS5 credentials to different circuits — this is not yet implemented.
 
-10. **Slack cannot use SOCKS5.** The Slack Python SDK's `client.proxy` parameter only accepts `http://` URLs. SOCKS5 is silently rejected. The workaround (privoxy HTTP→SOCKS5 proxy) adds another process and failure mode.
+10. **Slack cannot use SOCKS5.** The Slack Python SDK's `client.proxy` parameter only accepts `http://` URLs. Strict mode rejects Slack before client construction when the resolved proxy is SOCKS5 or missing. The workaround (privoxy HTTP→SOCKS5 proxy) adds another process and failure mode.
 
-11. **Windows has no `torsocks` equivalent.** On Linux, `torsocks` can force a binary through Tor via `LD_PRELOAD`. On Windows, no equivalent exists; strict mode therefore refuses to launch a network-capable child unless its caller declares and configures proxy awareness.
+11. **Native child proxy behavior is not inferable.** On Linux, `torsocks` can force a binary through Tor via `LD_PRELOAD`; Windows has no equivalent. Strict mode denies `execute_code`, unverified stdio MCP servers, and other network-capable children before launch rather than trusting ambient proxy variables.
 
 12. **Gateway restart during Tor outage may leave stale ALL_PROXY in .env.** If the gateway crashes and the supervisor restarts it while Tor is also dead, `.env` contains `ALL_PROXY=socks5://127.0.0.1:9050` pointing to a dead port. The `TOR_HEALTH` flag mitigates this but the window between crash and watchdog detection is up to 15 seconds.
 
-13. **No system-level transparent proxy.** Enforcement is at audited application entry points rather than the kernel. Strict mode converts missing policy wiring, unknown channels, and non-proxy-aware child processes into denials; a system-level transparent proxy remains useful as defense in depth against uninstrumented third-party code.
+13. **No system-level transparent proxy.** Enforcement is at audited application entry points rather than the kernel. Audited unknown channels and non-proxy-aware child processes are denied, but the policy does not globally intercept missing wiring in uninstrumented third-party code; a system-level transparent proxy remains useful as defense in depth.
 
 ### Operational Limitations
 

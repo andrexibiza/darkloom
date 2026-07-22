@@ -11,7 +11,7 @@
 
 ## Cryptographic Harness for Uncensorable AI Agent Communication
 
-**Andrex Ibiza (Axl Ibiza)** — Flat Crotch Collective · [@andrexibiza](https://github.com/andrexibiza)
+**Andrex Ibiza (Axl Ibiza)** · [@andrexibiza](https://github.com/andrexibiza)
 
 *With contributions to the [Hermes Agent](https://github.com/NousResearch/hermes-agent) gateway proxy architecture by the Nous Research community.*
 

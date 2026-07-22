@@ -392,8 +392,12 @@ valid proxy before creating a client, socket, or network-capable child process.
 UDP voice, direct SMTP/IMAP, IRC, raw-socket adapters, unknown future channels,
 direct LLM/web/browser/MCP calls, and non-proxy-aware subprocesses raise
 `NetworkPolicyError` before I/O. Tor bootstrap and loopback control are the only
-explicit direct capabilities. Apply `patches/0004-central-network-policy-fail-closed.patch`
-to the Hermes integration repository to install its entry-point guards.
+explicit direct capabilities. From a Hermes Agent checkout at commit
+`2244be2282e29a155379e83c20a99942045d5172`, apply
+`patches/0003-harden-tor-proxy-all-platforms.patch` first and then
+`patches/0004-central-network-policy-fail-closed.patch`. Verify both with
+`git apply --check` before applying them; patch 0004 is intentionally based on
+the proxy wiring installed by patch 0003.
 Full audit: `python -m hermes_tor.hardening audit`
 
 ## Reference

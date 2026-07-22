@@ -28,6 +28,7 @@ Or as a standalone pre-start wrapper:
 
 import logging
 import os
+import shutil
 import sys
 import threading
 import time
@@ -438,6 +439,25 @@ def start_tor_for_gateway(
     return mgr
 
 
+def _is_proxy_aware_gateway_command(command: list[str]) -> bool:
+    """Return whether *command* is the installed Hermes gateway launcher.
+
+    Proxy environment variables are only meaningful for the patched Hermes
+    process.  An arbitrary native executable can ignore them, so strict mode
+    must not infer proxy support merely because this wrapper supplied env vars.
+    """
+    if len(command) < 3 or command[1:3] != ["gateway", "run"]:
+        return False
+    executable = shutil.which(command[0])
+    if executable is None:
+        return False
+    try:
+        launcher = Path(executable).read_text(encoding="utf-8", errors="ignore")
+    except (OSError, UnicodeError):
+        return False
+    return "hermes_cli" in launcher and "import main" in launcher
+
+
 # ── CLI entry point ────────────────────────────────────────────
 
 def main():
@@ -505,7 +525,7 @@ def main():
 
     # Exec the gateway
     try:
-        authorize_subprocess(proxy_aware=True)
+        authorize_subprocess(proxy_aware=_is_proxy_aware_gateway_command(gateway_cmd))
         result = subprocess.run(gateway_cmd)
         sys.exit(result.returncode)
     finally:

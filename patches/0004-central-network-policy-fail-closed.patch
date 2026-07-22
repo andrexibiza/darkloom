@@ -1,124 +1,195 @@
-From: hermes-tor maintainers
-Subject: [PATCH] security: enforce centralized Tor policy at network boundaries
-
-This patch is applied to the Hermes integration repository after installing
-hermes-tor.  Every check precedes client/socket/process construction.
-
 diff --git a/gateway/platforms/base.py b/gateway/platforms/base.py
+index f71f8dc87..a074704b8 100644
 --- a/gateway/platforms/base.py
 +++ b/gateway/platforms/base.py
-@@
-+from hermes_tor.policy import NetworkChannel, authorize
-@@ def resolve_proxy_url(platform_env_var=None, target_hosts=None):
-+    # The selected adapter must call this before constructing its client.
-+    # In strict mode absence of a proxy is an error, never a direct fallback.
-@@
--    return None
-+    authorize(NetworkChannel.PLATFORM, proxy_url=None, proxy_aware=False)
-+    return None
-
-diff --git a/gateway/run.py b/gateway/run.py
---- a/gateway/run.py
-+++ b/gateway/run.py
-@@
-+from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
-@@ def initialize_platforms(self):
-+        authorize(NetworkChannel.GATEWAY, proxy_url=configured_proxy())
-
-diff --git a/plugins/platforms/discord/adapter.py b/plugins/platforms/discord/adapter.py
---- a/plugins/platforms/discord/adapter.py
-+++ b/plugins/platforms/discord/adapter.py
-@@
-+from hermes_tor.policy import NetworkChannel, authorize
-@@ def connect_voice(self, *args, **kwargs):
-+        authorize(NetworkChannel.UDP_VOICE)
-
-diff --git a/plugins/platforms/email/adapter.py b/plugins/platforms/email/adapter.py
---- a/plugins/platforms/email/adapter.py
-+++ b/plugins/platforms/email/adapter.py
-@@
-+from hermes_tor.policy import NetworkChannel, authorize
-@@ def _connect_smtp(self):
-+        authorize(NetworkChannel.SMTP)
-@@ def _connect_imap(self):
-+        authorize(NetworkChannel.IMAP)
-
-diff --git a/plugins/platforms/irc/adapter.py b/plugins/platforms/irc/adapter.py
---- a/plugins/platforms/irc/adapter.py
-+++ b/plugins/platforms/irc/adapter.py
-@@
-+from hermes_tor.policy import NetworkChannel, authorize
-@@ def connect(self):
-+        authorize(NetworkChannel.IRC)
-
-diff --git a/tools/browser_tool.py b/tools/browser_tool.py
---- a/tools/browser_tool.py
-+++ b/tools/browser_tool.py
-@@
-+from hermes_tor.policy import NetworkChannel, authorize
-@@ def _run_chrome_fallback_command(
-+    authorize(NetworkChannel.BROWSER, proxy_url=_tor_proxy, proxy_aware=bool(_tor_proxy))
-     return subprocess.run(base_args, env=browser_env, **kwargs)
-
-diff --git a/tools/web_tools.py b/tools/web_tools.py
---- a/tools/web_tools.py
-+++ b/tools/web_tools.py
-@@
-+from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
-@@ def _get_exa_client():
-+    authorize(NetworkChannel.WEB_TOOL, proxy_url=configured_proxy())
-@@ def _get_parallel_client():
-+    authorize(NetworkChannel.WEB_TOOL, proxy_url=configured_proxy())
-@@ def _tavily_request(*args, **kwargs):
-+    authorize(NetworkChannel.WEB_TOOL, proxy_url=configured_proxy())
-
-diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
---- a/tools/mcp_tool.py
-+++ b/tools/mcp_tool.py
-@@
-+from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
-@@ async def call_mcp_tool(*args, **kwargs):
-+    authorize(NetworkChannel.MCP, proxy_url=configured_proxy())
-
-diff --git a/hermes_cli/_subprocess_compat.py b/hermes_cli/_subprocess_compat.py
---- a/hermes_cli/_subprocess_compat.py
-+++ b/hermes_cli/_subprocess_compat.py
-@@
-+from hermes_tor.policy import authorize_subprocess, configured_proxy
+@@ -354,6 +354,17 @@ def should_bypass_proxy(target_hosts: str | list[str] | tuple[str, ...] | set[st
+     return False
+ 
+ 
++def _authorize_platform_proxy(proxy_url: str | None) -> str | None:
++    from hermes_tor.policy import NetworkChannel, authorize
 +
-+def authorize_network_child(*, proxy_aware: bool) -> None:
-+    """Mandatory pre-launch guard for every network-capable child."""
-+    authorize_subprocess(proxy_aware=proxy_aware, proxy_url=configured_proxy())
-
-diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
---- a/agent/auxiliary_client.py
-+++ b/agent/auxiliary_client.py
-@@
-+from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
-@@ def resolve_provider_client(*args, **kwargs):
-+    authorize(NetworkChannel.LLM, proxy_url=configured_proxy())
-
++    authorize(
++        NetworkChannel.PLATFORM,
++        proxy_url=proxy_url,
++        proxy_aware=proxy_url is not None,
++    )
++    return proxy_url
++
++
+ def resolve_proxy_url(
+     platform_env_var: str | None = None,
+     *,
+@@ -373,8 +384,8 @@ def resolve_proxy_url(
+         value = (os.environ.get(platform_env_var) or "").strip()
+         if value:
+             if should_bypass_proxy(target_hosts):
+-                return None
+-            return normalize_proxy_url(value)
++                return _authorize_platform_proxy(None)
++            return _authorize_platform_proxy(normalize_proxy_url(value))
+         # HARDENING: warn when platform-specific proxy var is empty but ALL_PROXY is set.
+         # Empty platform var overrides ALL_PROXY silently — user may not know they disabled Tor.
+         _all_proxy = os.environ.get("ALL_PROXY") or os.environ.get("all_proxy") or ""
+@@ -390,12 +401,12 @@ def resolve_proxy_url(
+         value = (os.environ.get(key) or "").strip()
+         if value:
+             if should_bypass_proxy(target_hosts):
+-                return None
+-            return normalize_proxy_url(value)
++                return _authorize_platform_proxy(None)
++            return _authorize_platform_proxy(normalize_proxy_url(value))
+     detected = normalize_proxy_url(_detect_macos_system_proxy())
+     if detected and should_bypass_proxy(target_hosts):
+-        return None
+-    return detected
++        return _authorize_platform_proxy(None)
++    return _authorize_platform_proxy(detected)
+ 
+ 
+ def proxy_kwargs_for_bot(proxy_url: str | None) -> dict:
 diff --git a/plugins/platforms/photon/adapter.py b/plugins/platforms/photon/adapter.py
+index 7b4090c91..94e2572cd 100644
 --- a/plugins/platforms/photon/adapter.py
 +++ b/plugins/platforms/photon/adapter.py
-@@ def _spawn_sidecar(self):
+@@ -73,6 +73,7 @@ logger = logging.getLogger(__name__)
+ 
+ _DEFAULT_SIDECAR_PORT = 8789
+ _DEFAULT_SIDECAR_BIND = "127.0.0.1"
++_SIDECAR_SUPPORTS_PROXY = False
+ 
+ # Photon iMessage messages from the SDK side have no documented hard
+ # limit, but the underlying iMessage protocol limits practical message
+@@ -990,6 +991,12 @@ class PhotonAdapter(BasePlatformAdapter):
+                 exc,
+             )
+ 
 +        from hermes_tor.policy import authorize_subprocess, configured_proxy
-+        authorize_subprocess(proxy_aware=self._sidecar_supports_proxy, proxy_url=configured_proxy())
-         self._sidecar_proc = subprocess.Popen(
-
++
++        authorize_subprocess(
++            proxy_aware=_SIDECAR_SUPPORTS_PROXY,
++            proxy_url=configured_proxy(),
++        )
+         self._sidecar_proc = subprocess.Popen(  # noqa: S603
+             [self._node_bin, str(_SIDECAR_DIR / "index.mjs")],
+             stdin=subprocess.PIPE,
 diff --git a/plugins/platforms/whatsapp/adapter.py b/plugins/platforms/whatsapp/adapter.py
+index 260a77989..e55142d98 100644
 --- a/plugins/platforms/whatsapp/adapter.py
 +++ b/plugins/platforms/whatsapp/adapter.py
-@@ def _spawn_bridge(self):
-+        from hermes_tor.policy import authorize_subprocess, configured_proxy
-+        authorize_subprocess(proxy_aware=self._bridge_supports_proxy, proxy_url=configured_proxy())
-         self._bridge_process = subprocess.Popen(
-
-diff --git a/plugins/platforms/raw_socket/adapter.py b/plugins/platforms/raw_socket/adapter.py
---- a/plugins/platforms/raw_socket/adapter.py
-+++ b/plugins/platforms/raw_socket/adapter.py
-@@
-+from hermes_tor.policy import authorize_raw_socket
-@@ def connect(self, address):
-+        authorize_raw_socket()
-         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+@@ -24,6 +24,7 @@ import signal
+ import subprocess
+ 
+ _IS_WINDOWS = platform.system() == "Windows"
++_BRIDGE_SUPPORTS_PROXY = False
+ from pathlib import Path
+ from typing import Dict, Optional, Any
+ 
+@@ -653,6 +654,12 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
+                 if _pk in os.environ:
+                     bridge_env[_pk] = os.environ[_pk]
+ 
++            from hermes_tor.policy import authorize_subprocess, configured_proxy
++
++            authorize_subprocess(
++                proxy_aware=_BRIDGE_SUPPORTS_PROXY,
++                proxy_url=configured_proxy(),
++            )
+             self._bridge_process = subprocess.Popen(
+                 [
+                     find_node_executable("node") or "node",
+diff --git a/plugins/web/exa/provider.py b/plugins/web/exa/provider.py
+index 17ce665dc..c592bc98c 100644
+--- a/plugins/web/exa/provider.py
++++ b/plugins/web/exa/provider.py
+@@ -71,6 +71,11 @@ def _get_exa_client() -> Any:
+ 
+     from exa_py import Exa  # noqa: WPS433 — deliberately lazy
+ 
++    from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
++
++    # exa-py 2.10.2 exposes no injectable HTTP client/transport. Never mark it
++    # proxy-aware in strict mode merely because proxy variables are present.
++    authorize(NetworkChannel.WEB_TOOL, proxy_url=configured_proxy(), proxy_aware=False)
+     client = Exa(api_key=api_key)
+     client.headers["x-exa-integration"] = "hermes-agent"
+     _wt._exa_client = client
+diff --git a/plugins/web/parallel/provider.py b/plugins/web/parallel/provider.py
+index 028f5df3f..5d90dc824 100644
+--- a/plugins/web/parallel/provider.py
++++ b/plugins/web/parallel/provider.py
+@@ -85,7 +85,13 @@ def _get_sync_client() -> Any:
+     _ensure_parallel_sdk_installed()
+     from parallel import Parallel  # noqa: WPS433 — deliberately lazy
+ 
+-    client = Parallel(api_key=api_key)
++    import httpx
++    from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
++
++    proxy_url = configured_proxy()
++    authorize(NetworkChannel.WEB_TOOL, proxy_url=proxy_url, proxy_aware=bool(proxy_url))
++    http_client = httpx.Client(transport=httpx.HTTPTransport(proxy=proxy_url))
++    client = Parallel(api_key=api_key, http_client=http_client)
+     _wt._parallel_client = client
+     return client
+ 
+@@ -113,7 +119,13 @@ def _get_async_client() -> Any:
+     _ensure_parallel_sdk_installed()
+     from parallel import AsyncParallel  # noqa: WPS433 — deliberately lazy
+ 
+-    client = AsyncParallel(api_key=api_key)
++    import httpx
++    from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
++
++    proxy_url = configured_proxy()
++    authorize(NetworkChannel.WEB_TOOL, proxy_url=proxy_url, proxy_aware=bool(proxy_url))
++    http_client = httpx.AsyncClient(transport=httpx.AsyncHTTPTransport(proxy=proxy_url))
++    client = AsyncParallel(api_key=api_key, http_client=http_client)
+     _wt._async_parallel_client = client
+     return client
+ 
+diff --git a/plugins/web/tavily/provider.py b/plugins/web/tavily/provider.py
+index e2a9d7b40..f0b2d9aaf 100644
+--- a/plugins/web/tavily/provider.py
++++ b/plugins/web/tavily/provider.py
+@@ -56,7 +56,13 @@ def _tavily_request(endpoint: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+     url = f"{base_url}/{endpoint.lstrip('/')}"
+     logger.info("Tavily %s request to %s", endpoint, url)
+ 
+-    response = httpx.post(url, json=payload, timeout=60)
++    from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
++
++    proxy_url = configured_proxy()
++    authorize(NetworkChannel.WEB_TOOL, proxy_url=proxy_url, proxy_aware=bool(proxy_url))
++    transport = httpx.HTTPTransport(proxy=proxy_url)
++    with httpx.Client(transport=transport, timeout=60) as client:
++        response = client.post(url, json=payload)
+     response.raise_for_status()
+     return response.json()
+ 
+diff --git a/tools/browser_tool.py b/tools/browser_tool.py
+index d84ca39d5..f8943f095 100644
+--- a/tools/browser_tool.py
++++ b/tools/browser_tool.py
+@@ -1093,10 +1093,18 @@ def _run_chrome_fallback_command(
+         cmd_prefix = [browser_cmd]
+     base_args = cmd_prefix + ["--engine", "chrome", "--session", tmp_session, "--json"]
+ 
+-    # HARDENING: if Tor proxy is configured, pass --proxy-server to Chromium
+-    _tor_proxy = os.environ.get("ALL_PROXY") or os.environ.get("TOR_PROXY") or ""
+-    if _tor_proxy and "socks5://" in _tor_proxy:
++    # Install the proxy in Chromium's command line before authorizing it.
++    from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
++
++    _tor_proxy = configured_proxy()
++    _proxy_installed = bool(_tor_proxy)
++    if _proxy_installed:
+         base_args += ["--proxy-server", _tor_proxy]
++    authorize(
++        NetworkChannel.BROWSER,
++        proxy_url=_tor_proxy,
++        proxy_aware=_proxy_installed,
++    )
+ 
+     task_socket_dir = os.path.join(_socket_safe_tmpdir(), f"agent-browser-{tmp_session}")
+     os.makedirs(task_socket_dir, mode=0o700, exist_ok=True)

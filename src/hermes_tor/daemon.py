@@ -57,12 +57,14 @@ TORRC_TEMPLATE = """\
 
 # Bind locally and use SOCKS credentials as Tor circuit-isolation tokens.
 SOCKSPort 127.0.0.1:{socks_port} IsolateSOCKSAuth
-ControlPort {control_port}
+{control_endpoint}
 DataDirectory {data_dir}
 Log notice stdout
 RunAsDaemon 0
 AvoidDiskWrites 1
-CookieAuthentication 0
+CookieAuthentication 1
+CookieAuthFile {cookie_path}
+CookieAuthFileGroupReadable 0
 GeoIPFile {geoip_path}
 GeoIPv6File {geoip6_path}
 
@@ -142,6 +144,8 @@ class TorDaemon:
 
         self._process: Optional[subprocess.Popen] = None
         self._torrc_path = self.data_dir / "torrc"
+        self.control_socket_path = self.data_dir / "control.sock"
+        self.cookie_path = self.data_dir / "control_auth_cookie"
         self._start_time: Optional[float] = None
         self._credential_lock = threading.Lock()
         self._active_credentials: set[SocksCredential] = set()
@@ -310,6 +314,11 @@ class TorDaemon:
             self.uptime_seconds,
         )
 
+        # Tor normally creates this as 0600.  Enforce that invariant rather
+        # than relying on the process umask, since it grants control of Tor.
+        if self.cookie_path.exists():
+            self.cookie_path.chmod(0o600)
+
     def stop(self, timeout: float = 10.0) -> None:
         """Stop the Tor daemon gracefully."""
         if not self._process:
@@ -413,11 +422,19 @@ class TorDaemon:
                 "# and restart. Get bridges from @GetBridgesBot on Telegram."
             )
 
+        if os.name == "nt":
+            # Never expose the control transport beyond this host.
+            control_endpoint = f"ControlPort 127.0.0.1:{self.control_port}"
+        else:
+            # Avoid a TCP listener altogether where Tor supports Unix sockets.
+            control_endpoint = f'ControlSocket "{self.control_socket_path}"'
+
         return TORRC_TEMPLATE.format(
             generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             socks_port=self.socks_port,
-            control_port=self.control_port,
+            control_endpoint=control_endpoint,
             data_dir=self.data_dir,
+            cookie_path=self.cookie_path,
             geoip_path=geoip_path,
             geoip6_path=geoip6_path,
             transport_plugins=transport_plugins,
@@ -427,6 +444,7 @@ class TorDaemon:
     def _write_torrc(self):
         """Write torrc to disk."""
         self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.data_dir.chmod(0o700)
         torrc_content = self._build_torrc()
         self._torrc_path.write_text(torrc_content)
         logger.debug("torrc written (%d bytes) to %s", len(torrc_content), self._torrc_path)

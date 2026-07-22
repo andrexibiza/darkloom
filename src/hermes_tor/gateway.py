@@ -28,6 +28,7 @@ Or as a standalone pre-start wrapper:
 
 import logging
 import os
+import socket
 import sys
 import threading
 import time
@@ -412,22 +413,70 @@ class TorWatchdog:
         Falls back to daemon restart for circuit rotation.
         """
         try:
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect(("127.0.0.1", self._mgr.control_port))
-            sock.sendall(b"AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n")
-            response = sock.recv(1024)
-            sock.close()
-            if b"250" in response:
-                logger.info("Tor circuit rotated via NEWNYM signal")
-                return
+            self._signal_newnym()
+            logger.info("Tor circuit rotated via NEWNYM signal")
+            return
         except Exception:
             logger.debug("NEWNYM via ControlPort failed, restarting daemon for fresh circuit")
 
         # Fallback: restart daemon for fresh circuit
         logger.info("Restarting Tor daemon for fresh circuit...")
         self._restart_tor()
+
+    def _signal_newnym(self) -> None:
+        """Authenticate to Tor and request a fresh circuit.
+
+        Commands are deliberately sent one at a time.  A response only counts
+        when every status line is well formed and the terminating line is a
+        250 success; a payload merely containing the bytes ``250`` is not an
+        authentication result.
+        """
+        daemon = self._mgr._daemon
+        if daemon is None:
+            raise RuntimeError("Tor daemon is not running")
+
+        cookie = daemon.cookie_path.read_bytes()
+        if not cookie:
+            raise RuntimeError("Tor control cookie is empty")
+
+        if os.name == "nt":
+            connection = socket.create_connection(
+                ("127.0.0.1", self._mgr.control_port), timeout=5
+            )
+        else:
+            connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            connection.settimeout(5)
+            connection.connect(str(daemon.control_socket_path))
+
+        with connection:
+            self._send_control_command(
+                connection, b"AUTHENTICATE " + cookie.hex().encode("ascii")
+            )
+            self._send_control_command(connection, b"SIGNAL NEWNYM")
+            connection.sendall(b"QUIT\r\n")
+
+    @staticmethod
+    def _send_control_command(connection: socket.socket, command: bytes) -> None:
+        connection.sendall(command + b"\r\n")
+        buffer = bytearray()
+        while True:
+            chunk = connection.recv(4096)
+            if not chunk:
+                raise RuntimeError("Tor control connection closed mid-response")
+            buffer.extend(chunk)
+            while b"\r\n" in buffer:
+                raw_line, _, remainder = buffer.partition(b"\r\n")
+                buffer = bytearray(remainder)
+                if len(raw_line) < 4 or not raw_line[:3].isdigit():
+                    raise RuntimeError("Malformed Tor control response")
+                code = int(raw_line[:3])
+                separator = raw_line[3:4]
+                if separator not in (b"-", b" "):
+                    raise RuntimeError("Malformed Tor control status line")
+                if code != 250:
+                    raise RuntimeError(f"Tor control command failed with status {code}")
+                if separator == b" ":
+                    return
 
 
 def start_tor_for_gateway(

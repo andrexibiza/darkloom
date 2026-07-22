@@ -280,7 +280,14 @@ def test_torrc_template_contains_required_fields(tmp_path):
 
     torrc = daemon._build_torrc()
     assert "SOCKSPort 127.0.0.1:9050 IsolateSOCKSAuth" in torrc
-    assert "ControlPort 9051" in torrc
+    if os.name == "nt":
+        assert "ControlPort 127.0.0.1:9051" in torrc
+    else:
+        assert "ControlSocket " in torrc
+        assert "ControlPort" not in torrc
+    assert "CookieAuthentication 1" in torrc
+    assert f"CookieAuthFile {tmp_path / 'data' / 'control_auth_cookie'}" in torrc
+    assert "CookieAuthFileGroupReadable 0" in torrc
     assert "UseBridges 1" in torrc
     assert "Bridge obfs4 1.2.3.4:443" in torrc
     assert "ClientTransportPlugin" in torrc
@@ -316,12 +323,56 @@ def test_tor_daemon_requires_binary_to_exist(tmp_path):
         TorDaemon(tor_binary=tmp_path / "nonexistent_tor", bridges=[])
 
 
+
 def _daemon_for_isolation_test(tmp_path):
     from hermes_tor.daemon import TorDaemon
 
     fake_tor = tmp_path / "tor"
     fake_tor.touch()
     return TorDaemon(tor_binary=fake_tor, data_dir=tmp_path / "data")
+
+
+class _ControlSocket:
+    def __init__(self, responses):
+        self.responses = iter(responses)
+        self.sent = []
+
+    def sendall(self, payload):
+        self.sent.append(payload)
+
+    def recv(self, _size):
+        return next(self.responses)
+
+
+def test_control_protocol_rejects_unauthenticated_client():
+    from hermes_tor.gateway import TorWatchdog
+
+    connection = _ControlSocket([b"515 Authentication required.\r\n"])
+    with pytest.raises(RuntimeError, match="status 515"):
+        TorWatchdog._send_control_command(connection, b"SIGNAL NEWNYM")
+
+
+@pytest.mark.parametrize("response", [b"250OK\r\n", b"x250 OK\r\n", b"250"])
+def test_control_protocol_rejects_forged_partial_250(response):
+    from hermes_tor.gateway import TorWatchdog
+
+    connection = _ControlSocket([response, b""])
+    with pytest.raises(RuntimeError):
+        TorWatchdog._send_control_command(connection, b"AUTHENTICATE 00")
+
+
+def test_torrc_has_no_non_loopback_control_binding(tmp_path):
+    from hermes_tor.daemon import TorDaemon
+
+    fake_tor = tmp_path / "tor"
+    fake_tor.touch()
+    daemon = TorDaemon(tor_binary=fake_tor, data_dir=tmp_path / "private")
+    torrc = daemon._build_torrc()
+
+    assert "ControlPort 0.0.0.0" not in torrc
+    assert "ControlPort [::]" not in torrc
+    if "ControlPort" in torrc:
+        assert "ControlPort 127.0.0.1:" in torrc
 
 
 def test_separate_identities_receive_different_authenticated_sessions(tmp_path):

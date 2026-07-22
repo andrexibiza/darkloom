@@ -39,6 +39,7 @@ from hermes_tor.constants import (
     DEFAULT_SOCKS_PORT,
 )
 from hermes_tor.manager import TorManager, TorStatus
+from hermes_tor.secure_files import atomic_private_write, private_lock
 
 logger = logging.getLogger(__name__)
 
@@ -128,31 +129,20 @@ def write_gateway_env_file(
     socks_port: int = DEFAULT_SOCKS_PORT,
     env_path: Optional[Path] = None,
 ):
-    """Write ALL_PROXY and related vars to ~/.hermes/.env for persistent config.
+    """Write proxy vars to a dedicated private Tor environment file.
 
-    The Hermes gateway loads ~/.hermes/.env at startup (gateway/run.py line 1422).
-    Writing these vars to .env means Tor routing persists across gateway restarts
-    without needing to inject env vars at runtime.
+    Keeping Tor values separate avoids parsing or rewriting the gateway's
+    credential-bearing ``~/.hermes/.env`` file.
 
     Args:
         socks_port: SOCKS5 port (default: 9050)
-        env_path: Path to .env file (default: ~/.hermes/.env)
+        env_path: Dedicated Tor env path (default: ~/.hermes/tor/gateway.env)
     """
     if env_path is None:
-        env_path = Path.home() / ".hermes" / ".env"
+        env_path = Path.home() / ".hermes" / "tor" / "gateway.env"
 
     proxy_url = f"socks5://127.0.0.1:{socks_port}"
 
-    # Read existing .env content
-    existing = {}
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, value = line.partition("=")
-                existing[key.strip()] = value.strip()
-
-    # Merge Tor proxy vars (preserve existing non-Tor vars)
     tor_vars = {
         "ALL_PROXY": proxy_url,
         "HTTPS_PROXY": proxy_url,
@@ -160,37 +150,22 @@ def write_gateway_env_file(
         "TOR_PROXY": proxy_url,
         "TOR_ENABLED": "1",
     }
-    existing.update(tor_vars)
-
-    # Write back
-    lines = []
-    for key, value in sorted(existing.items()):
-        lines.append(f"{key}={value}")
-
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text("\n".join(lines) + "\n")
+    content = "".join(f"{key}={value}\n" for key, value in sorted(tor_vars.items()))
+    with private_lock(env_path):
+        atomic_private_write(env_path, content)
     logger.info("Gateway Tor config written to %s (%d vars)", env_path, len(tor_vars))
 
 
 def remove_gateway_env_file(env_path: Optional[Path] = None):
-    """Remove Tor proxy vars from ~/.hermes/.env."""
+    """Remove the dedicated Tor proxy environment file."""
     if env_path is None:
-        env_path = Path.home() / ".hermes" / ".env"
+        env_path = Path.home() / ".hermes" / "tor" / "gateway.env"
 
-    if not env_path.exists():
-        return
-
-    tor_keys = set(GATEWAY_ENV_VARS.keys())
-    lines = []
-    for line in env_path.read_text().splitlines():
-        line_stripped = line.strip()
-        if line_stripped and not line_stripped.startswith("#") and "=" in line_stripped:
-            key = line_stripped.split("=", 1)[0].strip()
-            if key in tor_keys:
-                continue
-        lines.append(line)
-
-    env_path.write_text("\n".join(lines) + ("\n" if lines else ""))
+    with private_lock(env_path):
+        if env_path.is_symlink():
+            raise OSError(f"refusing symbolic link: {env_path}")
+        if env_path.exists():
+            env_path.unlink()
     logger.info("Gateway Tor config removed from %s", env_path)
 
 

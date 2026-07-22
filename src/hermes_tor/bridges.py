@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from hermes_tor.secure_files import atomic_private_write, private_lock, secure_read
+
 logger = logging.getLogger(__name__)
 
 # obfs4 bridges: obfs4 <IP>:<PORT> <FINGERPRINT> [cert=...] [iat-mode=...]
@@ -100,8 +102,11 @@ def load_bridges_from_file(path: Path) -> list[Bridge]:
         logger.warning("No bridges file at %s — Tor will use public relays", path)
         return []
 
+    with private_lock(path):
+        content = secure_read(path)
+
     bridges = []
-    for line in path.read_text().splitlines():
+    for line in content.splitlines():
         bridge = parse_bridge_line(line)
         if bridge:
             bridges.append(bridge)
@@ -118,12 +123,10 @@ def save_bridges_to_file(path: Path, bridge_lines: list[str], append: bool = Fal
         bridge_lines: List of full bridge lines.
         append: If True, append to existing file instead of overwriting.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-
-    mode = "a" if append else "w"
-    with open(path, mode) as f:
-        for line in bridge_lines:
-            f.write(line.strip() + "\n")
+    with private_lock(path):
+        previous = secure_read(path) if append and path.exists() else ""
+        content = previous + "".join(line.strip() + "\n" for line in bridge_lines)
+        atomic_private_write(path, content)
 
     logger.info("Wrote %d bridges to %s (append=%s)", len(bridge_lines), path, append)
 

@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import logging
 import os
 import shutil
+import subprocess
 import tarfile
 import tempfile
 from dataclasses import dataclass
@@ -17,7 +20,11 @@ from hermes_tor.constants import (
     CURRENT_ARCH,
     CURRENT_PLATFORM,
     TOR_BINARY_DIR,
+    TOR_RELEASE_SIGNING_FINGERPRINTS,
+    TOR_RELEASE_SIGNING_KEY,
+    TOR_VERSION,
     get_download_url,
+    get_signature_url,
     get_tor_binary_path,
     is_tor_installed,
 )
@@ -198,8 +205,93 @@ def _atomic_install(staging: Path, destination: Path) -> None:
         shutil.rmtree(backup)
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _verify_signature(artifact: Path, signature: Path) -> str:
+    """Verify a detached signature in an isolated keyring and return its signer."""
+    if not TOR_RELEASE_SIGNING_KEY.is_file():
+        raise DownloadError("Bundled Tor release signing key is missing")
+    with tempfile.TemporaryDirectory(prefix="hermes-tor-gpg-") as home:
+        home_path = Path(home)
+        home_path.chmod(0o700)
+        base = ["gpg", "--batch", "--no-tty", "--homedir", home]
+        try:
+            imported = subprocess.run(
+                base + ["--status-fd", "1", "--import", str(TOR_RELEASE_SIGNING_KEY)],
+                capture_output=True, text=True, check=False,
+            )
+            if imported.returncode:
+                raise DownloadError(f"Could not import bundled Tor signing key: {imported.stderr.strip()}")
+            checked = subprocess.run(
+                base + ["--status-fd", "1", "--verify", str(signature), str(artifact)],
+                capture_output=True, text=True, check=False,
+            )
+        except FileNotFoundError as exc:
+            raise DownloadError("GnuPG is required to authenticate Tor downloads") from exc
+
+    statuses = [line.removeprefix("[GNUPG:] ").split() for line in checked.stdout.splitlines()
+                if line.startswith("[GNUPG:] ")]
+    fatal = {"BADSIG", "ERRSIG", "EXPSIG", "EXPKEYSIG", "REVKEYSIG", "NO_PUBKEY"}
+    failures = [parts[0] for parts in statuses if parts and parts[0] in fatal]
+    valid = next((parts for parts in statuses if parts and parts[0] == "VALIDSIG"), None)
+    if checked.returncode or failures or valid is None:
+        reason = ", ".join(failures) or checked.stderr.strip() or "no valid signature"
+        raise DownloadError(f"Tor bundle signature verification failed: {reason}")
+    signer = valid[1].upper()
+    primary = valid[-1].upper()
+    if signer not in TOR_RELEASE_SIGNING_FINGERPRINTS and primary not in TOR_RELEASE_SIGNING_FINGERPRINTS:
+        raise DownloadError(f"Tor bundle was signed by unknown key {signer}")
+    return primary if primary in TOR_RELEASE_SIGNING_FINGERPRINTS else signer
+
+
+def _metadata_path() -> Path:
+    return TOR_BINARY_DIR / "install-metadata.json"
+
+
+def validate_installed_binary(*, strict: bool = True) -> bool:
+    """Re-hash the executable against authenticated installation metadata."""
+    binary = get_tor_binary_path()
+    metadata_path = _metadata_path()
+    if not binary.is_file():
+        return False
+    if not metadata_path.is_file():
+        if strict:
+            raise DownloadError("Tor installation has no signature-verification metadata")
+        return False
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        signer = metadata["signer_fingerprint"].upper()
+        expected = metadata["executable_sha256"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise DownloadError("Tor installation verification metadata is invalid") from exc
+    if signer not in TOR_RELEASE_SIGNING_FINGERPRINTS:
+        raise DownloadError(f"Tor installation records unknown signer {signer}")
+    if not isinstance(expected, str) or _sha256(binary) != expected:
+        raise DownloadError("Installed Tor executable does not match its verified digest")
+    return True
+
+
+def _download(url: str, destination: Path, progress_callback=None) -> None:
+    """Download a file with optional progress tracking."""
+    with httpx.stream("GET", url, follow_redirects=True, timeout=300) as response:
+        response.raise_for_status()
+        total = int(response.headers.get("content-length", 0))
+        downloaded = 0
+        with destination.open("wb") as stream:
+            for chunk in response.iter_bytes(chunk_size=65536):
+                stream.write(chunk)
+                downloaded += len(chunk)
+                if progress_callback:
+                    progress_callback(downloaded, total)
+
+
 def download_tor_binary(progress_callback=None, force: bool = False) -> Path:
-    """Download, fully verify, and atomically install a Tor Expert Bundle."""
     if is_tor_installed() and not force:
         return get_tor_binary_path()
 

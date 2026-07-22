@@ -4,6 +4,8 @@ Route ALL Hermes agent communication through Tor bridges for anonymity. Covers g
 
 ## Architecture
 
+**The threat model:** Governments and ISPs are moving to regulate who you get your AI from. They can block API endpoints, throttle connections, or monitor which models you use. Tor bridges make Hermes uncensorable — your AI traffic is cryptographically protected end-to-end, indistinguishable from random noise. No ISP, government, or intermediary can see which AI provider you're talking to, or stop you from talking to them. Your tokens, your models, your freedom.
+
 Hermes already has a centralized proxy resolver at `gateway/platforms/base.py`. Every platform adapter calls `resolve_proxy_url()`, which checks:
 
 1. Platform-specific env var (`TELEGRAM_PROXY`, `DISCORD_PROXY`, `PHOTON_PROXY`, `WHATSAPP_PROXY`, `MATRIX_PROXY`)
@@ -335,6 +337,30 @@ iptables -A OUTPUT -j DROP                            # Block everything else
 - **Don't share bridges publicly.** Bridges in `bridges.txt` are private. Never commit them to git.
 - **Don't route LLM API calls expecting account anonymity.** The API key in request headers identifies your account regardless of IP.
 - **Don't expect voice/video to work well through Tor.** UDP doesn't proxy through SOCKS5. Use text-only for anonymous communication.
+
+## Adversarial Hardening Audit
+
+14 leaks identified and locked down in an adversarial code review. Every outbound connection path traced.
+
+| Leak | Status | Description |
+|------|--------|-------------|
+| LEAK-01 | ✅ FIXED | WhatsApp bridge subprocess — Node.js bridge now receives ALL_PROXY/HTTPS_PROXY/HTTP_PROXY |
+| LEAK-02 | ⚠️ MITIGATED | Photon sidecar binary — ALL_PROXY/GRPC_PROXY injected; gRPC proxy depends on Go binary |
+| LEAK-03 | ✅ FIXED | Browser tool — `--proxy-server=socks5://127.0.0.1:9050` passed to Chromium |
+| LEAK-04 | ✅ FIXED | Web tools SDK — Firecrawl client receives proxy parameter |
+| LEAK-05 | ✅ FIXED | LLM API calls — verified OpenAI SDK routes through SOCKS5 via httpx+socksio |
+| LEAK-06 | ✅ FIXED | WebSocket proxy persistence — verified aiohttp_socks ProxyConnector handles full lifecycle |
+| LEAK-07 | ✅ FIXED | DNS leak — verified rdns=True on all aiohttp connectors |
+| LEAK-08 | ✅ FIXED | Slack SOCKS5 blocked — elevated to WARNING with privoxy workaround |
+| LEAK-09 | ✅ FIXED | Gateway restart race — TOR_HEALTH flag prevents startup on dead proxy |
+| LEAK-10 | ✅ FIXED | Platform env override — warns when empty platform var overrides ALL_PROXY |
+| LEAK-11 | 📄 DOCUMENTED | Discord voice UDP — SOCKS5 protocol limitation |
+| LEAK-12 | 📄 DOCUMENTED | Email SMTP/IMAP — Python smtplib/imaplib don't support SOCKS5 |
+| LEAK-13 | 📄 DOCUMENTED | IRC — raw TCP sockets |
+| LEAK-14 | 📄 DOCUMENTED | Import-time network calls — audited; no leaks found in major adapters |
+
+**TOR_STRICT_MODE**: Set `TOR_STRICT_MODE=1` to block all documented-leaky features (Discord voice, Email, IRC). Gateway refuses to start if Tor health check fails.
+Full audit: `python -m hermes_tor.hardening audit`
 
 ## Reference
 

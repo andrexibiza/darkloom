@@ -48,7 +48,12 @@ logger = logging.getLogger(__name__)
 # sharing circuits. Keep this list centralized for cleanup and env-file removal.
 GATEWAY_PROXY_VARS = {
     "ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "TOR_PROXY",
+    # Give every supported messaging adapter its own SOCKS authentication
+    # boundary.  Do not make platform traffic share one of the generic proxy
+    # credentials: IsolateSOCKSAuth treats matching credentials as the same
+    # Tor circuit, which would make otherwise unrelated accounts linkable.
     "TELEGRAM_PROXY", "DISCORD_PROXY", "MATRIX_PROXY",
+    "MATTERMOST_PROXY", "PHOTON_PROXY", "WHATSAPP_PROXY", "SMS_PROXY",
 }
 GATEWAY_ENV_VARS = GATEWAY_PROXY_VARS | {"TOR_ENABLED"}
 
@@ -73,9 +78,11 @@ def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
       - Telegram:   ✅ TELEGRAM_PROXY > ALL_PROXY > HTTPS_PROXY
       - Discord:    ✅ DISCORD_PROXY  > ALL_PROXY > HTTPS_PROXY
       - Matrix:     ✅ MATRIX_PROXY   > ALL_PROXY > HTTPS_PROXY
+      - Mattermost: ✅ MATTERMOST_PROXY > ALL_PROXY > HTTPS_PROXY
       - Slack:      ⚠️ HTTP proxy only (SOCKS rejected by Slack SDK)
-      - Photon:     ✅ After applying 0001-photon-proxy.patch
-      - WhatsApp:   ✅ After applying 0002-whatsapp-proxy.patch
+      - Photon:     ✅ PHOTON_PROXY after applying 0001-photon-proxy.patch
+      - WhatsApp:   ✅ WHATSAPP_PROXY after applying 0002-whatsapp-proxy.patch
+      - SMS:        ✅ SMS_PROXY
       - Email:      ❌ Raw SMTP/IMAP — no HTTP proxy support
     """
     proxy_urls = {

@@ -285,6 +285,16 @@ def test_proxy_http_uses_fresh_authenticated_url_per_request(monkeypatch):
 def test_gateway_boundaries_receive_distinct_authenticated_urls(monkeypatch):
     from hermes_tor.gateway import GATEWAY_PROXY_VARS, inject_gateway_env
 
+    platform_boundaries = {
+        "TELEGRAM_PROXY",
+        "DISCORD_PROXY",
+        "MATRIX_PROXY",
+        "MATTERMOST_PROXY",
+        "PHOTON_PROXY",
+        "WHATSAPP_PROXY",
+        "SMS_PROXY",
+    }
+    assert platform_boundaries <= GATEWAY_PROXY_VARS
     for key in GATEWAY_PROXY_VARS:
         monkeypatch.delenv(key, raising=False)
     inject_gateway_env(9150)

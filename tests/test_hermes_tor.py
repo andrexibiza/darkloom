@@ -6,6 +6,36 @@ import pytest
 from pathlib import Path
 
 
+# ── compatibility evidence tests ─────────────────────────────
+
+
+def test_compatibility_without_hermes_reports_patch_only(tmp_path):
+    from hermes_tor.hardening import EvidenceKind, ControlStatus, verify_compatibility
+
+    results = verify_compatibility(tmp_path, strict=False)
+    integration = [result for result in results if not result.control.documentation_only]
+    assert integration
+    assert all(result.status is ControlStatus.PATCH_ONLY for result in integration)
+    assert all(result.evidence is EvidenceKind.PATCH_ARTIFACT for result in integration)
+
+
+def test_strict_compatibility_fails_closed_without_hermes(tmp_path):
+    from hermes_tor.hardening import CompatibilityError, verify_compatibility
+
+    with pytest.raises(CompatibilityError, match="strict mode rejected"):
+        verify_compatibility(tmp_path, strict=True)
+
+
+def test_documentation_is_not_reported_as_enforcement(tmp_path):
+    from hermes_tor.hardening import EvidenceKind, ControlStatus, verify_compatibility
+
+    results = verify_compatibility(tmp_path, strict=False)
+    documentation = [result for result in results if result.control.documentation_only]
+    assert documentation
+    assert all(result.status is ControlStatus.UNVERIFIED for result in documentation)
+    assert all(result.evidence is EvidenceKind.DOCUMENTATION for result in documentation)
+
+
 # ── constants tests ────────────────────────────────────────────
 
 

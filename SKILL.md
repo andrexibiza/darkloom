@@ -268,6 +268,29 @@ remove_gateway_env_file()
 "
 ```
 
+## Operational Risks & Tradeoffs
+
+### LLM Exit Node Hostility
+
+OpenAI, Anthropic, and their API gateways (Cloudflare, AWS WAF) aggressively block traffic from known Tor exit nodes. You will see HTTP 403, 429, or invisible CAPTCHA challenges. This is not a bug — it's the providers protecting their APIs.
+
+**Solution:** `TOR_SKIP_LLM=1` routes LLM API calls direct (or through VPN) while keeping all other traffic through Tor. The API key already identifies your account — Tor adds IP privacy but not account anonymity for API calls. For truly anonymous LLM access, use local models or providers that don't block Tor.
+
+```python
+from hermes_tor.gateway import skip_llm_proxy
+skip_llm_proxy()  # Removes ALL_PROXY/HTTPS_PROXY/HTTP_PROXY for LLM calls
+```
+
+### Tor Latency
+
+3-hop Tor circuit + obfs4 bridges adds 500ms-2s latency. Streaming TTFT (Time To First Token) will spike. Batch API calls are less affected — the hit is on connection setup, not per-token.
+
+**Tradeoff:** For streaming chat, use `TOR_SKIP_LLM=1`. For batch workloads (subagent research, scheduled tasks), Tor overhead is negligible.
+
+### execute_code System Binary Leaks
+
+`ALL_PROXY` is a polite request, not a physical barrier. System binaries (`git`, `curl`, `pip`, compiled tools) ignore proxy env vars. On Linux, wrap with `torsocks`. On Windows, use `execute_code` + `proxy_http` instead of shelling out.
+
 ## Troubleshooting
 
 ### Tor won't bootstrap
@@ -358,6 +381,9 @@ iptables -A OUTPUT -j DROP                            # Block everything else
 | LEAK-12 | 📄 DOCUMENTED | Email SMTP/IMAP — Python smtplib/imaplib don't support SOCKS5 |
 | LEAK-13 | 📄 DOCUMENTED | IRC — raw TCP sockets |
 | LEAK-14 | 📄 DOCUMENTED | Import-time network calls — audited; no leaks found in major adapters |
+| LEAK-15 | 📄 DOCUMENTED | LLM exit node hostility — providers block Tor IPs (403/429); use TOR_SKIP_LLM=1 |
+| LEAK-16 | 📄 DOCUMENTED | execute_code system binary leaks — git/curl/pip bypass proxy; use torsocks on Linux |
+| LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — use TOR_SKIP_LLM=1 for streaming, Tor for batch |
 
 **TOR_STRICT_MODE**: Set `TOR_STRICT_MODE=1` to block all documented-leaky features (Discord voice, Email, IRC). Gateway refuses to start if Tor health check fails.
 Full audit: `python -m hermes_tor.hardening audit`

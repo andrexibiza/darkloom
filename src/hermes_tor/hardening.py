@@ -286,6 +286,62 @@ register(
     "All platform adapters (documentation)"
 )
 
+register(
+    LeakSeverity.HIGH, LeakStatus.DOCUMENTED,
+    "LLM exit node hostility — providers block known Tor exit IPs (403/429/CAPTCHA)",
+    "OpenAI, Anthropic, and their API gateways (Cloudflare, AWS WAF) aggressively "
+    "block traffic from known Tor exit nodes. Even though SOCKS5 hides traffic "
+    "from your ISP, the provider sees a Tor exit IP and returns HTTP 403, 429, "
+    "or invisible CAPTCHA challenges. This breaks API authentication and makes "
+    "LLM calls through Tor unreliable for major providers.",
+    "Documented mitigation: route LLM calls through VPN-only (bypass Tor) while "
+    "keeping all other traffic through Tor. The LLM API key already identifies "
+    "your account — Tor adds IP privacy but not account anonymity for API calls. "
+    "Set TOR_SKIP_LLM=1 to route LLM calls direct (or through VPN) while "
+    "everything else goes through Tor. For truly anonymous LLM access, use "
+    "providers that don't block Tor (local models, some open-source endpoints) "
+    "or route through a non-exit-node SOCKS5 proxy chain.",
+    "Verify: attempt an API call through Tor — if blocked, enable TOR_SKIP_LLM=1",
+    "hermes_tor/gateway.py, SKILL.md"
+)
+
+register(
+    LeakSeverity.MEDIUM, LeakStatus.DOCUMENTED,
+    "execute_code system binary leaks — git, curl, compiled tools bypass proxy",
+    "ALL_PROXY and HTTP_PROXY are environment variables that Python libraries "
+    "(httpx, aiohttp) respect — but they are polite requests, not physical "
+    "barriers. If an LLM writes an execute_code block that invokes a system "
+    "binary (git clone, curl, pip install, compiled C/Go/Rust tool), that "
+    "process ignores proxy env vars and uses the raw network interface. "
+    "This is a Python-level limitation — we proxy the Python HTTP stack but "
+    "cannot control subprocess network behavior.",
+    "Documented mitigation: On Linux, system binaries can be wrapped with "
+    "torsocks (LD_PRELOAD). On Windows, no equivalent exists. TOR_STRICT_MODE=1 "
+    "warns when execute_code blocks spawn subprocesses. Future: restricted "
+    "network namespaces via containerization (Docker with --network=none and "
+    "SOCKS5 proxy as sole egress).",
+    "Verify: check if git/curl/pip calls in execute_code show Tor exit IP in network capture",
+    "execute_code sandbox (documentation)"
+)
+
+register(
+    LeakSeverity.MEDIUM, LeakStatus.DOCUMENTED,
+    "Tor latency degrades streaming — 3-hop circuit + obfs4 adds 500ms-2s",
+    "Streaming LLM tokens through a 3-hop Tor circuit with obfs4 bridges "
+    "introduces 500ms-2s additional latency per request. Time To First Token "
+    "(TTFT) spikes. WebSocket connections (Discord, Matrix) may drop if "
+    "latency exceeds heartbeat timeout (typically 30-60s, so unlikely but "
+    "possible on degraded circuits). Bulk API calls (non-streaming) are "
+    "less affected — the latency hit is on connection setup, not per-token.",
+    "Documented tradeoff: Tor latency is the price of censorship resistance. "
+    "For latency-sensitive workloads (streaming chat, real-time voice), "
+    "consider VPN-only routing. For batch workloads (subagent research, "
+    "scheduled tasks, data extraction), Tor overhead is negligible. "
+    "TOR_SKIP_LLM=1 routes LLM streaming through VPN-only to preserve TTFT.",
+    "Measure: compare TTFT with and without Tor using the same provider/model",
+    "All network paths (documentation)"
+)
+
 
 # ═══════════════════════════════════════════════════════════════
 # Hardening Tools

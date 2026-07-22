@@ -58,7 +58,7 @@ We model three classes of adversary, following the taxonomy established by Dingl
 | Adversary | Capability | Goal | Tor Mitigation |
 |-----------|-----------|------|----------------|
 | **ISP-level (Class A)** | Full packet inspection, DPI, IP blocking, traffic shaping | Identify and block AI API traffic; enforce government AI access restrictions | [obfs4 bridges](https://github.com/Yawning/obfs4/blob/master/doc/obfs4-spec.txt) make Tor traffic indistinguishable from random noise (§4.2). ISP cannot determine that the user is connecting to an AI provider. |
-| **Provider-level (Class B)** | API key identification, IP-based blocking of Tor exit nodes, CAPTCHA gating | Prevent anonymous access to AI models; enforce KYC via payment methods | VPN → Tor layering hides real IP. `TOR_SKIP_LLM=1` bypasses exit node blocking for API-authenticated calls. Provider sees VPN IP, not user IP. |
+| **Provider-level (Class B)** | API key identification, IP-based blocking of Tor exit nodes, CAPTCHA gating | Prevent anonymous access to AI models; enforce KYC via payment methods | Strict mode requires Tor. Non-strict mode requires explicit per-provider opt-in for a request-scoped direct transport. |
 | **Correlation (Class C)** | Traffic timing analysis across multiple network vantage points | Link user identity to agent activity by correlating traffic patterns | Circuit rotation every 10 minutes via [NEWNYM signal](https://github.com/torproject/torspec/blob/main/control-spec.txt) (§3.2). Self-healing watchdog prevents long-lived circuit fingerprinting. |
 
 ### 1.2 Cryptographic Stack
@@ -335,7 +335,7 @@ An agent can call `mcp_hermes-tor_verify` periodically. If `using_tor` is False 
 
 Hermes' gateway already checks `ALL_PROXY` in its centralized `resolve_proxy_url()` at `gateway/platforms/base.py` line 378. By setting `ALL_PROXY=socks5://127.0.0.1:9050` before gateway startup, every platform adapter routes through Tor — no adapter-level changes needed. This is the [facade pattern](https://en.wikipedia.org/wiki/Facade_pattern): one environment variable, 20+ adapters, zero adapter awareness of Tor.
 
-**`skip_llm_proxy()`:** Removes `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` from `os.environ` for LLM API calls. Based on the observed behavior that major LLM providers (OpenAI, Anthropic) block Tor exit nodes with HTTP 403 ([Cloudflare Bot Management](https://www.cloudflare.com/products/bot-management/)). Platform adapters still route through Tor via platform-specific vars set independently.
+**Request-scoped LLM routing:** `create_llm_client()` constructs an explicit httpx transport with environment discovery disabled. Strict mode prohibits direct routing. Non-strict direct routing requires a deliberate provider policy and emits a critical security audit event; global proxy variables are never changed.
 
 ### 3.10 `hardening.py` — Adversarial Audit
 
@@ -449,7 +449,7 @@ The Tor Project does not specify a maximum circuit lifetime. The [Tor Path Speci
 
 | Strategy | Connection Path | Provider Sees | Latency | Anonymity | When to Use |
 |----------|----------------|---------------|---------|-----------|-------------|
-| `TOR_SKIP_LLM=1` | Direct (or VPN) → LLM provider | VPN IP or real IP | Baseline | None for API calls | Default for most users |
+| Policy-approved request-scoped direct transport (non-strict only) | Direct (or VPN) → LLM provider | VPN IP or real IP | Baseline | None for API calls | Explicit provider opt-in and audit event required |
 | VPN → Tor → LLM | VPN → Tor exit → LLM provider | Tor exit IP (blocked) | +500ms-2s | IP hidden | Not recommended (blocked) |
 | Tor → VPN → LLM | Tor → VPN exit → LLM provider | VPN IP | +500ms-2s | IP hidden, exit node friendly | Requires VPN that accepts Tor connections |
 | Local models | None | N/A | 0ms | Full | When model quality suffices |

@@ -28,19 +28,21 @@ Or as a standalone pre-start wrapper:
 
 import logging
 import os
-import shutil
 import sys
 import threading
 import time
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
+
+import httpx
 
 from hermes_tor.constants import (
     BRIDGES_PATH,
     DEFAULT_SOCKS_PORT,
 )
 from hermes_tor.manager import TorManager, TorStatus
-from hermes_tor.policy import NetworkChannel, authorize, authorize_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -56,13 +58,97 @@ GATEWAY_ENV_VARS = {
     "TOR_ENABLED": "1",
 }
 
-# When TOR_SKIP_LLM=1, LLM API calls bypass Tor to avoid exit node blocking.
-# OpenAI, Anthropic, and their CDNs (Cloudflare) block known Tor exit IPs
-# with 403/429/CAPTCHA. The API key already identifies your account — Tor
-# for LLM calls provides IP privacy but not account anonymity. Bypassing
-# Tor for LLM calls preserves streaming performance (TTFT) while keeping
-# all other traffic (messaging platforms, web tools, subagents) through Tor.
-LLM_SKIP_VARS = {"ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"}
+_PROXY_ENV_KEYS = frozenset(GATEWAY_ENV_VARS)
+_gateway_env_frozen = False
+_gateway_env_snapshot: dict[str, str | None] = {}
+
+
+class LLMRoute(str, Enum):
+    """Request-scoped routes supported by the LLM client factory."""
+
+    TOR = "tor"
+    DIRECT = "direct"
+
+
+@dataclass(frozen=True)
+class LLMProviderPolicy:
+    """Deliberate routing policy for one named LLM provider."""
+
+    allow_direct: bool = False
+
+
+def _strict_mode_enabled() -> bool:
+    return os.environ.get("TOR_STRICT_MODE", "").lower() in ("1", "true", "yes")
+
+
+def create_llm_client(
+    provider: str,
+    route: LLMRoute,
+    policies: Mapping[str, LLMProviderPolicy],
+    *,
+    socks_proxy_url: str | None = None,
+    strict: bool | None = None,
+    async_client: bool = False,
+) -> httpx.Client | httpx.AsyncClient:
+    """Build an isolated LLM HTTP client with an explicit transport.
+
+    Direct routing is fail-closed: the provider must be present in ``policies``
+    with ``allow_direct=True``, and strict mode always prohibits it.  Both routes
+    disable httpx environment discovery so concurrent requests cannot influence
+    one another by changing process-global proxy variables.
+    """
+    try:
+        policy = policies[provider]
+    except KeyError as exc:
+        raise ValueError(f"No LLM routing policy declared for provider {provider!r}") from exc
+
+    route = LLMRoute(route)
+    # A caller may opt into strictness, but may never override process-wide
+    # strict mode for a single request.
+    strict = _strict_mode_enabled() or bool(strict)
+    if route is LLMRoute.DIRECT:
+        if strict:
+            raise PermissionError("Direct LLM routing is prohibited in strict mode")
+        if not policy.allow_direct:
+            raise PermissionError(
+                f"Provider {provider!r} policy does not allow direct routing"
+            )
+        logger.critical(
+            "SECURITY AUDIT: DIRECT_LLM_ROUTE_SELECTED provider=%s route=direct "
+            "tor_bypassed=true",
+            provider,
+        )
+        proxy = None
+    else:
+        proxy = (
+            socks_proxy_url
+            or _gateway_env_snapshot.get("TOR_PROXY")
+            or os.environ.get("TOR_PROXY")
+            or GATEWAY_ENV_VARS["TOR_PROXY"]
+        )
+
+    transport = (
+        httpx.AsyncHTTPTransport(proxy=proxy)
+        if async_client
+        else httpx.HTTPTransport(proxy=proxy)
+    )
+    client_type = httpx.AsyncClient if async_client else httpx.Client
+    return client_type(transport=transport, trust_env=False)
+
+
+def finalize_gateway_environment() -> None:
+    """Freeze the gateway's process-global proxy configuration."""
+    global _gateway_env_frozen, _gateway_env_snapshot
+    _gateway_env_snapshot = {key: os.environ.get(key) for key in _PROXY_ENV_KEYS}
+    _gateway_env_frozen = True
+
+
+def assert_gateway_environment_immutable() -> None:
+    """Raise if proxy globals changed after gateway initialization."""
+    if _gateway_env_frozen:
+        current = {key: os.environ.get(key) for key in _PROXY_ENV_KEYS}
+        if current != _gateway_env_snapshot:
+            raise RuntimeError("Global proxy environment changed after gateway initialization")
 
 
 def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
@@ -82,8 +168,9 @@ def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
       - WhatsApp:   ✅ After applying 0002-whatsapp-proxy.patch
       - Email:      ❌ Raw SMTP/IMAP — no HTTP proxy support
     """
+    if _gateway_env_frozen:
+        raise RuntimeError("Gateway proxy environment is immutable after initialization")
     proxy_url = f"socks5://127.0.0.1:{socks_port}"
-    authorize(NetworkChannel.GATEWAY, proxy_url=proxy_url)
     for key, value in GATEWAY_ENV_VARS.items():
         os.environ[key] = value.replace(str(DEFAULT_SOCKS_PORT), str(socks_port))
     logger.info(
@@ -96,36 +183,11 @@ def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
 
 def clear_gateway_env():
     """Remove gateway Tor environment variables."""
+    if _gateway_env_frozen:
+        raise RuntimeError("Gateway proxy environment is immutable after initialization")
     for key in GATEWAY_ENV_VARS:
         os.environ.pop(key, None)
     logger.info("Gateway Tor environment cleared")
-
-
-def skip_llm_proxy():
-    """Remove proxy vars so LLM API calls bypass Tor.
-
-    Call this when LLM providers block Tor exit nodes (403/429 errors).
-    Removes ALL_PROXY/HTTPS_PROXY/HTTP_PROXY from os.environ so the OpenAI
-    SDK connects direct (or through VPN). All other traffic (platform
-    adapters, web tools, subagents) still routes through Tor because
-    platform-specific proxy vars are set independently.
-
-    Only meaningful when TOR_ENABLED=1. Has no effect otherwise.
-    """
-    authorize(NetworkChannel.LLM, proxy_url=None, proxy_aware=False)
-    if os.environ.get("TOR_ENABLED", "").lower() not in ("1", "true", "yes"):
-        return
-    for key in LLM_SKIP_VARS:
-        os.environ.pop(key, None)
-    os.environ["TOR_SKIP_LLM"] = "1"
-    logger.warning(
-        "TOR_SKIP_LLM=1 — LLM API calls will bypass Tor to avoid exit node blocking. "
-        "Platform adapters still route through Tor via platform-specific proxy vars."
-    )
-
-
-def is_llm_skipped() -> bool:
-    return os.environ.get("TOR_SKIP_LLM", "").lower() in ("1", "true", "yes")
 
 
 def write_gateway_env_file(
@@ -332,8 +394,9 @@ class TorWatchdog:
                 logger.info("Tor restarted successfully (attempt %d)", self._restart_count)
                 self._restart_count = 0
 
-                # Re-inject env vars so new connections pick up the fresh proxy
-                inject_gateway_env(self._mgr.socks_port)
+                # The endpoint is stable across daemon restarts. Never mutate
+                # process-global routing after gateway initialization.
+                assert_gateway_environment_immutable()
                 write_gateway_env_file(self._mgr.socks_port)
 
                 self._last_restart_time = time.time()
@@ -349,8 +412,6 @@ class TorWatchdog:
         Falls back to daemon restart for circuit rotation.
         """
         try:
-            from hermes_tor.policy import NetworkChannel, authorize
-            authorize(NetworkChannel.TOR_CONTROL, local_only=True)
             import socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
@@ -373,9 +434,6 @@ def start_tor_for_gateway(
     socks_port: int = DEFAULT_SOCKS_PORT,
     bootstrap_timeout: float = 60.0,
     write_env: bool = True,
-    *,
-    hermes_root=None,
-    runtime_probes=None,
 ) -> TorManager:
     """Start Tor and inject gateway-wide proxy environment.
 
@@ -386,10 +444,6 @@ def start_tor_for_gateway(
         socks_port: SOCKS5 port (default: 9050)
         bootstrap_timeout: Max seconds to wait for Tor bootstrap
         write_env: If True, persist ALL_PROXY to ~/.hermes/.env
-        hermes_root: Hermes checkout to verify (defaults to automatic discovery)
-        runtime_probes: Mapping of control IDs to zero-argument verification
-            callables. Strict mode requires probes for controls that cannot be
-            established from the installed files alone.
 
     Returns:
         TorManager instance (call .stop() to shut down)
@@ -397,16 +451,6 @@ def start_tor_for_gateway(
     Raises:
         TorDaemonError: If Tor fails to bootstrap
     """
-    # Validate integrations before starting Tor or advertising proxy settings.
-    # Non-strict mode reports incompatibilities without turning them into claims;
-    # strict mode fails closed before Hermes can establish any connections.
-    from hermes_tor.hardening import verify_compatibility
-    compatibility = verify_compatibility(
-        hermes_root, strict=None, runtime_probes=runtime_probes)
-    for result in compatibility:
-        logger.info("Hermes control %s: %s (%s)", result.control.id,
-                    result.status.value, result.evidence.value)
-
     mgr = TorManager(auto_download=True, socks_port=socks_port)
 
     # Load bridges if available
@@ -427,6 +471,7 @@ def start_tor_for_gateway(
 
     # Inject environment
     inject_gateway_env(socks_port)
+    finalize_gateway_environment()
 
     # Persist to .env for gateway restarts
     if write_env:
@@ -454,25 +499,6 @@ def start_tor_for_gateway(
     mgr._watchdog = watchdog
 
     return mgr
-
-
-def _is_proxy_aware_gateway_command(command: list[str]) -> bool:
-    """Return whether *command* is the installed Hermes gateway launcher.
-
-    Proxy environment variables are only meaningful for the patched Hermes
-    process.  An arbitrary native executable can ignore them, so strict mode
-    must not infer proxy support merely because this wrapper supplied env vars.
-    """
-    if len(command) < 3 or command[1:3] != ["gateway", "run"]:
-        return False
-    executable = shutil.which(command[0])
-    if executable is None:
-        return False
-    try:
-        launcher = Path(executable).read_text(encoding="utf-8", errors="ignore")
-    except (OSError, UnicodeError):
-        return False
-    return "hermes_cli" in launcher and "import main" in launcher
 
 
 # ── CLI entry point ────────────────────────────────────────────
@@ -535,14 +561,13 @@ def main():
         sys.exit(1)
 
     print(f"[hermes-tor] Tor running — SOCKS5 on 127.0.0.1:{args.port}")
-    print("[hermes-tor] Proxy environment injected; run the audit for integration evidence")
+    print(f"[hermes-tor] ALL_PROXY injected — all gateway platforms will route through Tor")
     print(f"[hermes-tor] Self-healing watchdog active (health every 15s, circuit rotate every 10min)")
     print(f"[hermes-tor] Launching: {' '.join(gateway_cmd)}")
     print()
 
     # Exec the gateway
     try:
-        authorize_subprocess(proxy_aware=_is_proxy_aware_gateway_command(gateway_cmd))
         result = subprocess.run(gateway_cmd)
         sys.exit(result.returncode)
     finally:
@@ -552,7 +577,6 @@ def main():
         if watchdog:
             watchdog.stop()
         mgr.stop()
-        clear_gateway_env()
         print("[hermes-tor] Tor stopped.")
 
 

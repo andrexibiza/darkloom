@@ -2,6 +2,8 @@
 
 Run: uv run pytest tests/ -v
 """
+import os
+
 import pytest
 from pathlib import Path
 
@@ -277,7 +279,7 @@ def test_torrc_template_contains_required_fields(tmp_path):
     )
 
     torrc = daemon._build_torrc()
-    assert "SOCKSPort 9050" in torrc
+    assert "SOCKSPort 127.0.0.1:9050 IsolateSOCKSAuth" in torrc
     assert "ControlPort 9051" in torrc
     assert "UseBridges 1" in torrc
     assert "Bridge obfs4 1.2.3.4:443" in torrc
@@ -312,6 +314,132 @@ def test_tor_daemon_requires_binary_to_exist(tmp_path):
 
     with pytest.raises(TorDaemonError, match="Tor binary not found"):
         TorDaemon(tor_binary=tmp_path / "nonexistent_tor", bridges=[])
+
+
+def _daemon_for_isolation_test(tmp_path):
+    from hermes_tor.daemon import TorDaemon
+
+    fake_tor = tmp_path / "tor"
+    fake_tor.touch()
+    return TorDaemon(tor_binary=fake_tor, data_dir=tmp_path / "data")
+
+
+def test_separate_identities_receive_different_authenticated_sessions(tmp_path):
+    from hermes_tor.daemon import IsolationIdentity
+
+    daemon = _daemon_for_isolation_test(tmp_path)
+    agent = daemon.issue_socks_credential(IsolationIdentity("conversation-a", "agent-a"))
+    subagent = daemon.issue_socks_credential(
+        IsolationIdentity("conversation-a", "agent-a", subagent_id="researcher")
+    )
+    platform = daemon.issue_socks_credential(
+        IsolationIdentity("conversation-a", "agent-a", platform_account="support@example.test")
+    )
+    browser = daemon.issue_socks_credential(
+        IsolationIdentity("conversation-a", "agent-a", browser_context="private-tab-1")
+    )
+    task = daemon.issue_socks_credential(
+        IsolationIdentity("conversation-a", "agent-a", sensitive_task="incident-42")
+    )
+
+    authentications = {lease.authentication() for lease in (agent, subagent, platform, browser, task)}
+    assert len(authentications) == 5
+
+    daemon.stop()
+    assert all(lease.discarded for lease in (agent, subagent, platform, browser, task))
+    with pytest.raises(Exception, match="discarded"):
+        agent.authentication()
+
+
+def test_credentials_are_not_reused_for_unrelated_conversations(tmp_path):
+    from hermes_tor.daemon import IsolationIdentity
+
+    daemon = _daemon_for_isolation_test(tmp_path)
+    first = daemon.issue_socks_credential(IsolationIdentity("conversation-a", "agent-a"))
+    second = daemon.issue_socks_credential(IsolationIdentity("conversation-b", "agent-a"))
+    assert first.authentication() != second.authentication()
+
+
+def test_anonymous_helpers_cannot_create_isolated_client(tmp_path):
+    from hermes_tor.daemon import TorDaemonError
+
+    daemon = _daemon_for_isolation_test(tmp_path)
+    with pytest.raises(TorDaemonError, match="anonymous SOCKS clients are forbidden"):
+        with daemon.isolated_client(None):
+            pass
+
+
+@pytest.mark.parametrize("option", ["proxy", "trust_env", "mounts"])
+def test_isolated_client_rejects_routing_overrides(tmp_path, option):
+    from hermes_tor.daemon import IsolationIdentity, TorDaemonError
+
+    daemon = _daemon_for_isolation_test(tmp_path)
+    identity = IsolationIdentity("conversation-a", "agent-a")
+    with pytest.raises(TorDaemonError, match=option):
+        with daemon.isolated_client(identity, **{option: {}}):
+            pass
+
+
+def test_proxy_http_uses_fresh_authenticated_url_per_request(monkeypatch):
+    from hermes_tor.proxy_http import _get_proxy_url
+
+    monkeypatch.setenv("TOR_PROXY", "socks5://127.0.0.1:9150")
+    first = _get_proxy_url()
+    second = _get_proxy_url()
+    assert first != second
+    assert first.startswith("socks5://")
+    assert "@127.0.0.1:9150" in first
+
+
+def test_gateway_boundaries_receive_distinct_authenticated_urls(monkeypatch):
+    from hermes_tor.gateway import GATEWAY_PROXY_VARS, inject_gateway_env
+
+    platform_boundaries = {
+        "TELEGRAM_PROXY",
+        "DISCORD_PROXY",
+        "MATRIX_PROXY",
+        "MATTERMOST_PROXY",
+        "PHOTON_PROXY",
+        "WHATSAPP_PROXY",
+        "SMS_PROXY",
+    }
+    assert platform_boundaries <= GATEWAY_PROXY_VARS
+    for key in GATEWAY_PROXY_VARS:
+        monkeypatch.delenv(key, raising=False)
+    inject_gateway_env(9150)
+    proxy_urls = {os.environ[key] for key in GATEWAY_PROXY_VARS}
+    assert len(proxy_urls) == len(GATEWAY_PROXY_VARS)
+    assert all("@127.0.0.1:9150" in url for url in proxy_urls)
+
+
+def test_isolated_client_uses_request_credentials_and_discards_them(
+    tmp_path, monkeypatch
+):
+    from hermes_tor.daemon import IsolationIdentity
+    import hermes_tor.daemon as daemon_module
+
+    captured = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(daemon_module.httpx, "Client", FakeClient)
+    daemon = _daemon_for_isolation_test(tmp_path)
+    identity = IsolationIdentity("conversation-a", "agent-a", browser_context="tab-a")
+    with daemon.isolated_client(identity) as client:
+        assert isinstance(client, FakeClient)
+        assert captured["proxy"].startswith("socks5://")
+        assert "@127.0.0.1:9050" in captured["proxy"]
+        assert captured["trust_env"] is False
+        assert len(daemon._active_credentials) == 1
+    assert daemon._active_credentials == set()
 
 
 # ── verifier tests ────────────────────────────────────────────

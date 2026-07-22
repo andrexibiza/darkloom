@@ -96,7 +96,7 @@ def test_proxy_http_refuses_direct_client_before_httpx_construction(monkeypatch)
     from hermes_tor import proxy_http
 
     monkeypatch.setattr(proxy_http.httpx, "Client", lambda *a, **k: pytest.fail("client created"))
-    with pytest.raises(NetworkPolicyError):
+    with pytest.raises(TypeError, match="does not accept use_tor"):
         proxy_http.tor_get("https://example.test", use_tor=False)
 
 

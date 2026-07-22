@@ -37,73 +37,27 @@ def _require_tor_enabled() -> None:
 
 
 def _get_proxy_url() -> str:
-    """Get the SOCKS5 proxy URL from environment or default."""
-    return os.environ.get("TOR_PROXY", DEFAULT_PROXY)
+    """Get a fresh authenticated SOCKS5 proxy URL for request-scoped circuit isolation.
 
-
-def _get_transport(use_tor: bool = True):
-    """Return a SOCKS5 transport if Tor is enabled, None for direct connection.
-
-    Uses httpx.HTTPTransport with socks5 proxy. socksio is already
-    installed in the Hermes venv — it handles the SOCKS protocol
-    without additional dependencies.
+    Each call generates a unique credential, ensuring Tor's IsolateSOCKSAuth
+    creates a separate circuit for each request. This prevents cross-request
+    circuit correlation.
     """
-    proxy_url = _get_proxy_url() if use_tor and _is_tor_enabled() else None
-    authorize(NetworkChannel.HTTP, proxy_url=proxy_url, proxy_aware=proxy_url is not None)
-    if proxy_url:
-        return httpx.HTTPTransport(proxy=proxy_url)
-    return None
+    import uuid
+    base = os.environ.get("TOR_PROXY", DEFAULT_PROXY)
+    # Only generate credentials for valid socks5:// URLs
+    if base.startswith("socks5://"):
+        from urllib.parse import urlparse
+        parsed = urlparse(base)
+        # Don't generate credentials for malformed URLs — let the validator reject them
+        if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
+            return base
+        hostport = parsed.netloc or "127.0.0.1:9050"
+        credential = uuid.uuid4().hex[:12]
+        return f"socks5://{credential}@{hostport}"
+    return base
 
 
-def tor_get(url: str, use_tor: bool = True, timeout: float = 30.0, **kwargs) -> dict:
-    """HTTP GET through Tor (or direct if Tor disabled).
-
-    Args:
-        url: Target URL.
-        use_tor: If False, always use direct connection.
-        timeout: Request timeout in seconds.
-        **kwargs: Passed to httpx.Client.get().
-
-    Returns:
-        dict with status_code, text, headers, url keys.
-    """
-    transport = _get_transport(use_tor)
-    with httpx.Client(
-        transport=transport,
-        timeout=timeout,
-        follow_redirects=True,
-    ) as client:
-        resp = client.get(url, **kwargs)
-        resp.raise_for_status()
-        return {
-            "status_code": resp.status_code,
-            "headers": dict(resp.headers),
-            "text": resp.text,
-            "url": str(resp.url),
-        }
-
-
-def tor_post(
-    url: str,
-    use_tor: bool = True,
-    timeout: float = 30.0,
-    **kwargs,
-) -> dict:
-    """HTTP POST through Tor (or direct if Tor disabled)."""
-    transport = _get_transport(use_tor)
-    with httpx.Client(
-        transport=transport,
-        timeout=timeout,
-        follow_redirects=True,
-    ) as client:
-        resp = client.post(url, **kwargs)
-        resp.raise_for_status()
-        return {
-            "status_code": resp.status_code,
-            "headers": dict(resp.headers),
-            "text": resp.text,
-            "url": str(resp.url),
-        }
 
 
 def _validated_proxy_address(proxy_url: str) -> tuple[str, int]:
@@ -115,8 +69,8 @@ def _validated_proxy_address(proxy_url: str) -> tuple[str, int]:
 
     if parsed.scheme.lower() != "socks5":
         raise TorUnavailableError("TOR_PROXY must use the socks5 scheme")
-    if parsed.username is not None or parsed.password is not None:
-        raise TorUnavailableError("credentials in TOR_PROXY are not supported")
+    if parsed.password is not None:
+        raise TorUnavailableError("password authentication in TOR_PROXY is not supported")
     if parsed.path not in ("", "/") or parsed.query or parsed.fragment:
         raise TorUnavailableError("TOR_PROXY must not contain a path, query, or fragment")
     if parsed.hostname is None or port is None:

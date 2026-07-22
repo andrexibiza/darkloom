@@ -413,27 +413,27 @@ def inject_subprocess_proxy_env(env_dict: dict[str, str]) -> dict[str, str]:
 
 
 def enable_strict_mode():
-    """Enable TOR_STRICT_MODE — blocks all known-leaky features.
+    """Enable the centralized fail-closed policy for all wired entry points.
 
-    When TOR_STRICT_MODE=1:
-    - Discord voice is disabled
-    - Email adapter refuses to connect
-    - IRC adapter refuses to connect
-    - Gateway refuses to start if Tor health check fails
-    - Slack logs CRITICAL warning about SOCKS5 incompatibility
-    - All platform connections require Tor proxy to be reachable
+    The policy denies unknown channels, UDP voice, SMTP, IMAP, IRC, direct HTTP,
+    raw sockets, and non-proxy-aware children before socket/process creation.
+    Only Tor bootstrap/control and proxy-aware clients are explicitly allowed.
     """
-    os.environ["TOR_STRICT_MODE"] = "1"
-    logger.warning("TOR_STRICT_MODE enabled — Discord voice, Email, IRC blocked")
+    from hermes_tor.policy import enable_strict_mode as _enable
+    _enable()
+    logger.warning("TOR_STRICT_MODE enabled — unapproved network operations fail closed")
     return True
 
 
 def is_strict_mode() -> bool:
-    return os.environ.get("TOR_STRICT_MODE", "").lower() in ("1", "true", "yes")
+    from hermes_tor.policy import is_strict_mode as _is_strict
+    return _is_strict()
 
 
 def check_tor_health(socks_port: int = 9050, timeout: float = 2.0) -> bool:
     """Check if Tor SOCKS5 proxy is accepting connections."""
+    from hermes_tor.policy import NetworkChannel, authorize
+    authorize(NetworkChannel.TOR_CONTROL, local_only=True)
     import socket
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

@@ -31,6 +31,8 @@ from typing import Any
 
 import httpx
 
+from hermes_tor.policy import NetworkChannel, authorize
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_PROXY = "socks5://127.0.0.1:9050"
@@ -53,8 +55,10 @@ def _get_transport(use_tor: bool = True):
     installed in the Hermes venv — it handles the SOCKS protocol
     without additional dependencies.
     """
-    if use_tor and _is_tor_enabled():
-        return httpx.HTTPTransport(proxy=_get_proxy_url())
+    proxy_url = _get_proxy_url() if use_tor and _is_tor_enabled() else None
+    authorize(NetworkChannel.HTTP, proxy_url=proxy_url, proxy_aware=proxy_url is not None)
+    if proxy_url:
+        return httpx.HTTPTransport(proxy=proxy_url)
     return None
 
 

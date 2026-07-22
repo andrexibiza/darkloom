@@ -385,7 +385,15 @@ iptables -A OUTPUT -j DROP                            # Block everything else
 | LEAK-16 | 📄 DOCUMENTED | execute_code system binary leaks — git/curl/pip bypass proxy; use torsocks on Linux |
 | LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — use TOR_SKIP_LLM=1 for streaming, Tor for batch |
 
-**TOR_STRICT_MODE**: Set `TOR_STRICT_MODE=1` to block all documented-leaky features (Discord voice, Email, IRC). Gateway refuses to start if Tor health check fails.
+**`TOR_STRICT_MODE` guarantee:** Set `TOR_STRICT_MODE=1` (or call
+`hermes_tor.enable_strict_mode()`) to activate the centralized, default-deny
+policy. Wired clients must identify an explicitly allowed channel and provide a
+valid proxy before creating a client, socket, or network-capable child process.
+UDP voice, direct SMTP/IMAP, IRC, raw-socket adapters, unknown future channels,
+direct LLM/web/browser/MCP calls, and non-proxy-aware subprocesses raise
+`NetworkPolicyError` before I/O. Tor bootstrap and loopback control are the only
+explicit direct capabilities. Apply `patches/0004-central-network-policy-fail-closed.patch`
+to the Hermes integration repository to install its entry-point guards.
 Full audit: `python -m hermes_tor.hardening audit`
 
 ## Reference

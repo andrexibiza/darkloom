@@ -1,0 +1,124 @@
+From: hermes-tor maintainers
+Subject: [PATCH] security: enforce centralized Tor policy at network boundaries
+
+This patch is applied to the Hermes integration repository after installing
+hermes-tor.  Every check precedes client/socket/process construction.
+
+diff --git a/gateway/platforms/base.py b/gateway/platforms/base.py
+--- a/gateway/platforms/base.py
++++ b/gateway/platforms/base.py
+@@
++from hermes_tor.policy import NetworkChannel, authorize
+@@ def resolve_proxy_url(platform_env_var=None, target_hosts=None):
++    # The selected adapter must call this before constructing its client.
++    # In strict mode absence of a proxy is an error, never a direct fallback.
+@@
+-    return None
++    authorize(NetworkChannel.PLATFORM, proxy_url=None, proxy_aware=False)
++    return None
+
+diff --git a/gateway/run.py b/gateway/run.py
+--- a/gateway/run.py
++++ b/gateway/run.py
+@@
++from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
+@@ def initialize_platforms(self):
++        authorize(NetworkChannel.GATEWAY, proxy_url=configured_proxy())
+
+diff --git a/plugins/platforms/discord/adapter.py b/plugins/platforms/discord/adapter.py
+--- a/plugins/platforms/discord/adapter.py
++++ b/plugins/platforms/discord/adapter.py
+@@
++from hermes_tor.policy import NetworkChannel, authorize
+@@ def connect_voice(self, *args, **kwargs):
++        authorize(NetworkChannel.UDP_VOICE)
+
+diff --git a/plugins/platforms/email/adapter.py b/plugins/platforms/email/adapter.py
+--- a/plugins/platforms/email/adapter.py
++++ b/plugins/platforms/email/adapter.py
+@@
++from hermes_tor.policy import NetworkChannel, authorize
+@@ def _connect_smtp(self):
++        authorize(NetworkChannel.SMTP)
+@@ def _connect_imap(self):
++        authorize(NetworkChannel.IMAP)
+
+diff --git a/plugins/platforms/irc/adapter.py b/plugins/platforms/irc/adapter.py
+--- a/plugins/platforms/irc/adapter.py
++++ b/plugins/platforms/irc/adapter.py
+@@
++from hermes_tor.policy import NetworkChannel, authorize
+@@ def connect(self):
++        authorize(NetworkChannel.IRC)
+
+diff --git a/tools/browser_tool.py b/tools/browser_tool.py
+--- a/tools/browser_tool.py
++++ b/tools/browser_tool.py
+@@
++from hermes_tor.policy import NetworkChannel, authorize
+@@ def _run_chrome_fallback_command(
++    authorize(NetworkChannel.BROWSER, proxy_url=_tor_proxy, proxy_aware=bool(_tor_proxy))
+     return subprocess.run(base_args, env=browser_env, **kwargs)
+
+diff --git a/tools/web_tools.py b/tools/web_tools.py
+--- a/tools/web_tools.py
++++ b/tools/web_tools.py
+@@
++from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
+@@ def _get_exa_client():
++    authorize(NetworkChannel.WEB_TOOL, proxy_url=configured_proxy())
+@@ def _get_parallel_client():
++    authorize(NetworkChannel.WEB_TOOL, proxy_url=configured_proxy())
+@@ def _tavily_request(*args, **kwargs):
++    authorize(NetworkChannel.WEB_TOOL, proxy_url=configured_proxy())
+
+diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
+--- a/tools/mcp_tool.py
++++ b/tools/mcp_tool.py
+@@
++from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
+@@ async def call_mcp_tool(*args, **kwargs):
++    authorize(NetworkChannel.MCP, proxy_url=configured_proxy())
+
+diff --git a/hermes_cli/_subprocess_compat.py b/hermes_cli/_subprocess_compat.py
+--- a/hermes_cli/_subprocess_compat.py
++++ b/hermes_cli/_subprocess_compat.py
+@@
++from hermes_tor.policy import authorize_subprocess, configured_proxy
++
++def authorize_network_child(*, proxy_aware: bool) -> None:
++    """Mandatory pre-launch guard for every network-capable child."""
++    authorize_subprocess(proxy_aware=proxy_aware, proxy_url=configured_proxy())
+
+diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
+--- a/agent/auxiliary_client.py
++++ b/agent/auxiliary_client.py
+@@
++from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
+@@ def resolve_provider_client(*args, **kwargs):
++    authorize(NetworkChannel.LLM, proxy_url=configured_proxy())
+
+diff --git a/plugins/platforms/photon/adapter.py b/plugins/platforms/photon/adapter.py
+--- a/plugins/platforms/photon/adapter.py
++++ b/plugins/platforms/photon/adapter.py
+@@ def _spawn_sidecar(self):
++        from hermes_tor.policy import authorize_subprocess, configured_proxy
++        authorize_subprocess(proxy_aware=self._sidecar_supports_proxy, proxy_url=configured_proxy())
+         self._sidecar_proc = subprocess.Popen(
+
+diff --git a/plugins/platforms/whatsapp/adapter.py b/plugins/platforms/whatsapp/adapter.py
+--- a/plugins/platforms/whatsapp/adapter.py
++++ b/plugins/platforms/whatsapp/adapter.py
+@@ def _spawn_bridge(self):
++        from hermes_tor.policy import authorize_subprocess, configured_proxy
++        authorize_subprocess(proxy_aware=self._bridge_supports_proxy, proxy_url=configured_proxy())
+         self._bridge_process = subprocess.Popen(
+
+diff --git a/plugins/platforms/raw_socket/adapter.py b/plugins/platforms/raw_socket/adapter.py
+--- a/plugins/platforms/raw_socket/adapter.py
++++ b/plugins/platforms/raw_socket/adapter.py
+@@
++from hermes_tor.policy import authorize_raw_socket
+@@ def connect(self, address):
++        authorize_raw_socket()
+         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

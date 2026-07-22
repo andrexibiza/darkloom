@@ -39,6 +39,7 @@ from hermes_tor.constants import (
     DEFAULT_SOCKS_PORT,
 )
 from hermes_tor.manager import TorManager, TorStatus
+from hermes_tor.policy import NetworkChannel, authorize, authorize_subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +82,7 @@ def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
       - Email:      ❌ Raw SMTP/IMAP — no HTTP proxy support
     """
     proxy_url = f"socks5://127.0.0.1:{socks_port}"
+    authorize(NetworkChannel.GATEWAY, proxy_url=proxy_url)
     for key, value in GATEWAY_ENV_VARS.items():
         os.environ[key] = value.replace(str(DEFAULT_SOCKS_PORT), str(socks_port))
     logger.info(
@@ -109,6 +111,7 @@ def skip_llm_proxy():
 
     Only meaningful when TOR_ENABLED=1. Has no effect otherwise.
     """
+    authorize(NetworkChannel.LLM, proxy_url=None, proxy_aware=False)
     if os.environ.get("TOR_ENABLED", "").lower() not in ("1", "true", "yes"):
         return
     for key in LLM_SKIP_VARS:
@@ -345,6 +348,8 @@ class TorWatchdog:
         Falls back to daemon restart for circuit rotation.
         """
         try:
+            from hermes_tor.policy import NetworkChannel, authorize
+            authorize(NetworkChannel.TOR_CONTROL, local_only=True)
             import socket
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(5)
@@ -500,6 +505,7 @@ def main():
 
     # Exec the gateway
     try:
+        authorize_subprocess(proxy_aware=True)
         result = subprocess.run(gateway_cmd)
         sys.exit(result.returncode)
     finally:

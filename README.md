@@ -303,9 +303,9 @@ Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use `T
 
 ### Protocol-Level Limitations (Cannot Be Fixed)
 
-1. **SOCKS5 is TCP-only.** Discord voice (UDP), WebRTC, DNS-over-UDP, and any UDP-based protocol cannot be proxied through the Tor SOCKS5 interface. Voice and video will always leak. See RFC 1928 §3-4.
+1. **SOCKS5 is TCP-only.** Discord voice (UDP), WebRTC, DNS-over-UDP, and any UDP-based protocol cannot be proxied through the Tor SOCKS5 interface. In strict mode these unsupported channels fail before socket creation rather than leaking. See RFC 1928 §3-4.
 
-2. **Raw socket protocols are uncovered.** SMTP (port 25/587), IMAP (port 993), and IRC (port 6667/6697) use Python's `smtplib`, `imaplib`, and `irc` libraries — none of which support SOCKS5. Email and IRC adapters cannot route through Tor without replacing their underlying transport libraries.
+2. **Raw socket protocols cannot be routed.** SMTP (port 25/587), IMAP (port 993), and IRC (port 6667/6697) use libraries without SOCKS5 support. Strict mode denies these adapters before their libraries create a socket.
 
 3. **API key deanonymizes regardless of IP.** The LLM API key in request headers identifies your account. Tor hides your IP but not your account. For true anonymity at the API level, you would need anonymous payment methods and provider accounts not tied to real identity.
 
@@ -325,11 +325,11 @@ Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use `T
 
 10. **Slack cannot use SOCKS5.** The Slack Python SDK's `client.proxy` parameter only accepts `http://` URLs. SOCKS5 is silently rejected. The workaround (privoxy HTTP→SOCKS5 proxy) adds another process and failure mode.
 
-11. **Windows has no `torsocks` equivalent.** On Linux, `torsocks` can force any binary through Tor via `LD_PRELOAD`. On Windows, no equivalent exists. System binary calls from `execute_code` blocks will always bypass Tor on Windows.
+11. **Windows has no `torsocks` equivalent.** On Linux, `torsocks` can force a binary through Tor via `LD_PRELOAD`. On Windows, no equivalent exists; strict mode therefore refuses to launch a network-capable child unless its caller declares and configures proxy awareness.
 
 12. **Gateway restart during Tor outage may leave stale ALL_PROXY in .env.** If the gateway crashes and the supervisor restarts it while Tor is also dead, `.env` contains `ALL_PROXY=socks5://127.0.0.1:9050` pointing to a dead port. The `TOR_HEALTH` flag mitigates this but the window between crash and watchdog detection is up to 15 seconds.
 
-13. **No system-level transparent proxy.** All Tor routing is opt-in at the application layer (Python HTTP clients). A process that ignores proxy environment variables — such as a native binary spawned by a platform adapter — will bypass Tor silently. A system-level transparent proxy (iptables/nftables on Linux, no equivalent on Windows) would close this gap.
+13. **No system-level transparent proxy.** Enforcement is at audited application entry points rather than the kernel. Strict mode converts missing policy wiring, unknown channels, and non-proxy-aware child processes into denials; a system-level transparent proxy remains useful as defense in depth against uninstrumented third-party code.
 
 ### Operational Limitations
 

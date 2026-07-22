@@ -8,13 +8,14 @@
     ]
   },
   "patch": {
-    "id": "hermes-tor/0003-harden-tor-proxy-all-platforms@61169ce23ad6",
+    "id": "hermes-tor/0003-harden-tor-proxy-all-platforms@92eb666714a7",
     "path": "patches/0003-harden-tor-proxy-all-platforms.patch",
-    "sha256": "61169ce23ad6ab16ae704c5b5c02fb9fc4076bd5a29badfbbfd225b9a0e4e8a9"
+    "sha256": "92eb666714a78078c6ce05ce168e8962ff36a34d0375bad92161d063d85ccd4a"
   },
   "patched_files": {
     "gateway/platforms/base.py": "76811bfdf77a243ccf7a0fe1a606380b2f642e52392b102e01e9ccaccfc22cc6",
-    "plugins/platforms/photon/adapter.py": "f405615ddf9ad9251bd9b2248f07a7a6fde1a40097982353135958e1ac0ebd79",
+    "plugins/platforms/photon/adapter.py": "ddf6b17d7885f14c529f014ab221d20edde7c2efa2bf1766fb505384f75cc137",
+    "plugins/platforms/photon/sidecar/index.mjs": "d886ca1911a86162e3e1a68bd32c26de6bfff111980b136b80467fe17edd1874",
     "plugins/platforms/slack/adapter.py": "ffe81dd481752c9ad161cc21768185e37160b975dfacd4ece084c22f565f57b1",
     "plugins/platforms/whatsapp/adapter.py": "7c6f6a27ade69746020e093a07764fbeaca878bfdda9310973d1264d62c2a634",
     "plugins/web/firecrawl/provider.py": "db604cbf9b1ae2d83884ba65cba5570a735b078375db906ebd2c71b4f53daa86",
@@ -25,9 +26,10 @@
       "id": "HT-001",
       "title": "Photon local sidecar IPC stays direct while the sidecar receives proxy configuration",
       "files": [
-        "plugins/platforms/photon/adapter.py"
+        "plugins/platforms/photon/adapter.py",
+        "plugins/platforms/photon/sidecar/index.mjs"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@61169ce23ad6"
+      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@92eb666714a7"
     },
     {
       "id": "HT-002",
@@ -35,7 +37,7 @@
       "files": [
         "plugins/platforms/whatsapp/adapter.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@61169ce23ad6"
+      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@92eb666714a7"
     },
     {
       "id": "HT-003",
@@ -43,7 +45,7 @@
       "files": [
         "tools/browser_tool.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@61169ce23ad6"
+      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@92eb666714a7"
     },
     {
       "id": "HT-004",
@@ -51,7 +53,7 @@
       "files": [
         "plugins/web/firecrawl/provider.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@61169ce23ad6"
+      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@92eb666714a7"
     },
     {
       "id": "HT-005",
@@ -59,7 +61,7 @@
       "files": [
         "plugins/platforms/slack/adapter.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@61169ce23ad6"
+      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@92eb666714a7"
     },
     {
       "id": "HT-006",
@@ -67,7 +69,7 @@
       "files": [
         "gateway/platforms/base.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@61169ce23ad6"
+      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@92eb666714a7"
     },
     {
       "id": "HT-007",

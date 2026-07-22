@@ -29,6 +29,7 @@ class ControlStatus(Enum):
     PATCH_ONLY = "patch_only"
     MITIGATED = "mitigated"
     VERIFIED = "verified"
+    INCOMPATIBLE = "incompatible"
 
 
 class EvidenceKind(Enum):
@@ -137,8 +138,8 @@ def verify_compatibility(
                 try:
                     passed = probe() is True
                 except Exception as exc:
-                    result = ControlResult(control, ControlStatus.UNVERIFIED,
-                                           EvidenceKind.DOCUMENTATION,
+                    result = ControlResult(control, ControlStatus.INCOMPATIBLE,
+                                           EvidenceKind.RUNTIME_VERIFICATION,
                                            f"runtime probe failed: {exc}")
                 else:
                     if passed:
@@ -146,6 +147,10 @@ def verify_compatibility(
                             control, ControlStatus.VERIFIED,
                             EvidenceKind.RUNTIME_VERIFICATION,
                             "caller-supplied runtime probe confirmed the unsafe feature is disabled")
+                    else:
+                        result = ControlResult(control, ControlStatus.INCOMPATIBLE,
+                                               EvidenceKind.RUNTIME_VERIFICATION,
+                                               "caller-supplied runtime probe reported failure")
         elif root is None or not revision_ok:
             detail = "Hermes installation not found" if root is None else (
                 f"Hermes revision {revision or 'unknown'} != required {control.hermes_revision}")
@@ -167,15 +172,19 @@ def verify_compatibility(
                 if probe is not None:
                     try:
                         passed = probe() is True
-                    except Exception as exc:  # a failed probe is evidence of no verification
-                        result = ControlResult(control, ControlStatus.MITIGATED,
-                                               EvidenceKind.INSTALLED_PATCH,
+                    except Exception as exc:
+                        result = ControlResult(control, ControlStatus.INCOMPATIBLE,
+                                               EvidenceKind.RUNTIME_VERIFICATION,
                                                f"runtime probe failed: {exc}")
                     else:
                         if passed:
                             result = ControlResult(control, ControlStatus.VERIFIED,
                                                    EvidenceKind.RUNTIME_VERIFICATION,
                                                    "caller-supplied runtime probe passed")
+                        else:
+                            result = ControlResult(control, ControlStatus.INCOMPATIBLE,
+                                                   EvidenceKind.RUNTIME_VERIFICATION,
+                                                   "caller-supplied runtime probe reported failure")
 
         results.append(result)
 
@@ -183,8 +192,8 @@ def verify_compatibility(
     # documentation-only leak controls describe known escape hatches; excluding
     # them here would turn an acknowledged lack of enforcement into permission
     # to start Hermes.
-    incompatible = [r for r in results
-                    if r.status in (ControlStatus.UNVERIFIED, ControlStatus.PATCH_ONLY)]
+    incompatible = [r for r in results if r.status in (
+        ControlStatus.UNVERIFIED, ControlStatus.PATCH_ONLY, ControlStatus.INCOMPATIBLE)]
     if strict and incompatible:
         summary = "; ".join(f"{r.control.id}: {r.detail}" for r in incompatible)
         raise CompatibilityError(f"strict mode rejected incompatible Hermes integration: {summary}")

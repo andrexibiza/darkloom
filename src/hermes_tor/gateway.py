@@ -367,6 +367,9 @@ def start_tor_for_gateway(
     socks_port: int = DEFAULT_SOCKS_PORT,
     bootstrap_timeout: float = 60.0,
     write_env: bool = True,
+    *,
+    hermes_root=None,
+    runtime_probes=None,
 ) -> TorManager:
     """Start Tor and inject gateway-wide proxy environment.
 
@@ -377,6 +380,10 @@ def start_tor_for_gateway(
         socks_port: SOCKS5 port (default: 9050)
         bootstrap_timeout: Max seconds to wait for Tor bootstrap
         write_env: If True, persist ALL_PROXY to ~/.hermes/.env
+        hermes_root: Hermes checkout to verify (defaults to automatic discovery)
+        runtime_probes: Mapping of control IDs to zero-argument verification
+            callables. Strict mode requires probes for controls that cannot be
+            established from the installed files alone.
 
     Returns:
         TorManager instance (call .stop() to shut down)
@@ -388,7 +395,8 @@ def start_tor_for_gateway(
     # Non-strict mode reports incompatibilities without turning them into claims;
     # strict mode fails closed before Hermes can establish any connections.
     from hermes_tor.hardening import verify_compatibility
-    compatibility = verify_compatibility(strict=None)
+    compatibility = verify_compatibility(
+        hermes_root, strict=None, runtime_probes=runtime_probes)
     for result in compatibility:
         logger.info("Hermes control %s: %s (%s)", result.control.id,
                     result.status.value, result.evidence.value)

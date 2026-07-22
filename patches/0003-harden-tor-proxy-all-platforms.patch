@@ -20,28 +20,48 @@ index 9bbd5a9..f71f8dc 100644
                  "https_proxy", "http_proxy", "all_proxy"):
          value = (os.environ.get(key) or "").strip()
 diff --git a/plugins/platforms/photon/adapter.py b/plugins/platforms/photon/adapter.py
-index 29f4902..cd566e8 100644
+index 29f4902..70bf7e1 100644
 --- a/plugins/platforms/photon/adapter.py
 +++ b/plugins/platforms/photon/adapter.py
 @@ -950,6 +950,12 @@ class PhotonAdapter(BasePlatformAdapter):
          # never runs — can't leave it orphaned on the port.
          env["PHOTON_SIDECAR_WATCH_STDIN"] = "1"
- 
-+        # HARDENING: inject proxy vars so the Photon sidecar can route through Tor.
-+        # The sidecar is a Go binary using gRPC — gRPC reads GRPC_PROXY, HTTPS_PROXY.
-+        for _pk in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "GRPC_PROXY", "https_proxy"):
+
++        # HARDENING: pass proxy configuration to the Photon sidecar. Its bootstrap
++        # maps this to grpc-js' documented lower-case grpc_proxy setting.
++        for _pk in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "https_proxy"):
 +            if _pk in os.environ:
 +                env[_pk] = os.environ[_pk]
 +
          # Windows: hide the child console (0 elsewhere). Same helper the
          # discord/whatsapp adapters use for their sidecar spawns.
          from hermes_cli._subprocess_compat import windows_hide_flags
+diff --git a/plugins/platforms/photon/sidecar/index.mjs b/plugins/platforms/photon/sidecar/index.mjs
+index db0e93a..131c000 100644
+--- a/plugins/platforms/photon/sidecar/index.mjs
++++ b/plugins/platforms/photon/sidecar/index.mjs
+@@ -59,6 +59,15 @@ import crypto from "node:crypto";
+ import { once } from "node:events";
+ import { patchSpectrumTs } from "./patch-spectrum-mixed-attachments.mjs";
+
++// grpc-js, used by spectrum-ts, consumes the lower-case grpc_proxy variable.
++// Configure it before spectrum-ts is dynamically imported; merely copying the
++// parent environment into the sidecar does not configure the gRPC dialer.
++const photonProxy =
++  process.env.PHOTON_PROXY || process.env.ALL_PROXY || process.env.all_proxy;
++if (photonProxy && !process.env.grpc_proxy) {
++  process.env.grpc_proxy = photonProxy;
++}
++
+ const projectId = process.env.PHOTON_PROJECT_ID;
+ const projectSecret = process.env.PHOTON_PROJECT_SECRET;
+ const port = parseInt(process.env.PHOTON_SIDECAR_PORT || "8789", 10);
 diff --git a/plugins/platforms/slack/adapter.py b/plugins/platforms/slack/adapter.py
 index bde89f4..f342f48 100644
 --- a/plugins/platforms/slack/adapter.py
 +++ b/plugins/platforms/slack/adapter.py
 @@ -296,10 +296,21 @@ def _resolve_slack_proxy_url() -> Optional[str]:
- 
+
      normalized = proxy_url.lower()
      if not normalized.startswith(("http://", "https://")):
 -        logger.info(
@@ -64,7 +84,7 @@ index bde89f4..f342f48 100644
 +                safe_url_for_log(proxy_url),
 +            )
          return None
- 
+
      if any(is_host_excluded_by_no_proxy(host) for host in _SLACK_PROXY_HOSTS):
 diff --git a/plugins/platforms/whatsapp/adapter.py b/plugins/platforms/whatsapp/adapter.py
 index 7cf94b7..39fc217 100644
@@ -76,12 +96,12 @@ index 7cf94b7..39fc217 100644
  )
 -
  logger = logging.getLogger(__name__)
- 
+
  # Inbound owner-typed WhatsApp text is prefixed at MessageEvent construction so
 @@ -639,6 +638,12 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
              bridge_env["HERMES_AUDIO_CACHE_DIR"] = str(_get_audio_dir())
              bridge_env["HERMES_DOCUMENT_CACHE_DIR"] = str(_get_doc_dir())
- 
+
 +            # HARDENING: inject proxy env vars so the Node bridge routes through Tor.
 +            # Baileys/whatsapp-web.js uses http-proxy-agent which reads ALL_PROXY.
 +            for _pk in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
@@ -96,7 +116,7 @@ index ae02b43..50e0325 100644
 --- a/plugins/web/firecrawl/provider.py
 +++ b/plugins/web/firecrawl/provider.py
 @@ -260,6 +260,10 @@ def _get_firecrawl_client() -> Any:
- 
+
      # Construct via the re-exported Firecrawl proxy on tools.web_tools so
      # unit tests patching ``tools.web_tools.Firecrawl`` see their mock.
 +    # HARDENING: inject proxy so Firecrawl SDK routes through Tor
@@ -113,7 +133,7 @@ index bcc1455..d84ca39 100644
 @@ -1093,6 +1093,11 @@ def _run_chrome_fallback_command(
          cmd_prefix = [browser_cmd]
      base_args = cmd_prefix + ["--engine", "chrome", "--session", tmp_session, "--json"]
- 
+
 +    # HARDENING: if Tor proxy is configured, pass --proxy-server to Chromium
 +    _tor_proxy = os.environ.get("ALL_PROXY") or os.environ.get("TOR_PROXY") or ""
 +    if _tor_proxy and "socks5://" in _tor_proxy:

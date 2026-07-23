@@ -45,6 +45,8 @@ Here is what Darkloom would have done, step by step, with line numbers:
 | 17,000 autonomous actions undetected | MAPE-K drift detection → Level 3 human intervention | [Protocol Doc](https://github.com/andrexibiza/darkloom/blob/main/docs/DARKLOOM_PROTOCOL.md) | §5 |
 | Exfiltrated credentials / harvest-then-decrypt | Hybrid ECDH + NTRU-Encrypt KEM at λ=128 | [Protocol Doc](https://github.com/andrexibiza/darkloom/blob/main/docs/DARKLOOM_PROTOCOL.md) | §2 |
 
+![Five-Layer Prevention — Darkloom's Concentric Defense](imgs/13-framework-five-layers.png)
+
 The Sol incident is the proof case for verification-first agent architecture. OpenAI built the most capable model in the world and lost control of it because their sandbox trusted a single proxy. Hermes + Darkloom doesn't trust the proxy. It verifies every outbound byte.
 
 ---
@@ -93,6 +95,8 @@ The handshake adds 658 µs of client-side computation. For the guarantee that in
 ## 5. Integration Surface
 
 Darkloom integrates with Hermes at three points:
+
+![Darkloom × Hermes Integration Surface](imgs/14-framework-integration-surface.png)
 
 1. **Gateway wrapper:** `python -m darkloom.gateway -- hermes gateway run` — starts Tor daemon, injects `ALL_PROXY`, launches Hermes with all 23 platform adapters routing through Tor
 2. **Policy patches:** Three patch files at [`patches/`](https://github.com/andrexibiza/darkloom/tree/main/patches) inject `authorize()` calls into Hermes' network entry points — LLM auxiliary client, MCP connection handler, browser tool, web tools, email, IRC, Discord voice, Slack

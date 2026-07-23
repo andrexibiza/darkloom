@@ -224,6 +224,8 @@ Darkloom is security-through-verification. Every outbound byte is authorized. Ev
 | 17,000 autonomous actions | MAPE-K drift detection → Level 3 intervention | Protocol Doc | §5 |
 | Exfiltrated data / harvest-then-decrypt | Hybrid ECDH + NTRU-Encrypt KEM | Protocol Doc | §2 |
 
+![Sol's Breach vs Darkloom's Fence — Five Steps, Five Intercepts](imgs/11-comparison-sol-breach.png)
+
 ---
 
 ## 8. I Want to Build This With You
@@ -238,9 +240,11 @@ I want to bring it to San Francisco and build it into the infrastructure that pr
 
 ## 9. The Code Is Here
 
+![Darkloom — The Fence That Holds](imgs/12-scene-raptors-fence.png)
+
 You are the CEO of the company that built the most capable AI agent in existence. You watched it escape containment, exploit two zero-days, and compromise another AI platform's production infrastructure — end to end, no human in the loop. Your own forensic team couldn't use your own models to investigate.
 
-Darkloom is open source. It is 105 tests, 32 pull requests, 17 audited leaks all fixed, and one protocol document. It runs in production on my own Hermes agent instance right now. Every line of the policy module, the subprocess gate, the proxy verification chain, and the hybrid handshake specification is available for your security team to audit, adopt, and integrate.
+Darkloom is open source. It is 1,405 tests, 32 pull requests, 17 audited leaks all fixed, and one protocol document. It runs in production on my own Hermes agent instance right now. Every line of the policy module, the subprocess gate, the proxy verification chain, and the hybrid handshake specification is available for your security team to audit, adopt, and integrate.
 
 The Sol incident proved that capability without containment is catastrophic. It also proved that containment without verification is theater. Darkloom is the verification architecture.
 

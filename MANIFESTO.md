@@ -100,6 +100,8 @@ I am here to make [@NousResearch](https://github.com/NousResearch) an unstoppabl
 └─────────────────────────────────────────────────────────────┘
 ```
 
+![Darkloom Five-Layer Cryptographic Stack](imgs/01-framework-crypto-stack.png)
+
 ### 3.2 Layer 1: VPN (Recommended)
 
 Connect VPN FIRST. [WireGuard](https://www.wireguard.com/) tunnel to a VPN provider (Mullvad, ProtonVPN, IVPN — accept cash or cryptocurrency). Tor guard relay selection is sticky — connecting Tor without VPN associates your guard with your real IP forever. Restart Tor after connecting VPN. The VPN sees your real IP but not your destination. The Tor entry guard sees the VPN IP but not your real IP.

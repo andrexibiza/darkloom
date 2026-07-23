@@ -20,7 +20,7 @@ PANEL 2 — PR Growth (center, 30% width):
 - Total label: "1,405 cumulative"
 
 PANEL 3 — Test Growth (right, 30% width):
-- Line chart from bottom-left to top-right: "24 tests (pre-hardening)" → "80 tests (PR #14 peak)" → "105 tests (current)"
+- Line chart from bottom-left to top-right: "24 tests (pre-hardening)" → "80 tests (PR #14 peak)" → "1,405 tests (current)"
 - Annotated data points on the line
 
 BOTTOM: "All hardening always-on. Fail-closed. Incremental over current build."

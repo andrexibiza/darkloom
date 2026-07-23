@@ -41,6 +41,8 @@ The hybrid handshake significantly increases the computational burden on the cli
 | **Total Computational Cost** | **527 µs** | **1,185 µs** |
 | Client Cost Bias | 50% | 74% |
 
+![Post-Quantum Hybrid Handshake — ECDH + NTRU-Encrypt KEM](imgs/02-framework-hybrid-handshake.png)
+
 ### Key Derivation and Link Encryption
 
 - **Key Derivation:** Extract-and-Expand KDF via HKDF-SHA256 ([RFC 5869](https://datatracker.ietf.org/doc/html/rfc5869))
@@ -48,6 +50,8 @@ The hybrid handshake significantly increases the computational burden on the cli
 - **Session Key:** Derived from both the classical ECDH shared secret AND the NTRU decapsulated shared secret, XOR-combined before HKDF extraction. If either primitive is broken, the session key remains secure as long as the other holds.
 
 ### Post-Quantum Security Posture
+
+![Harvest-Then-Decrypt Defense — Post-Quantum Timeline](imgs/10-timeline-harvest-decrypt.png)
 
 | Attack Vector | Classical | Quantum |
 |--------------|-----------|---------|
@@ -70,6 +74,8 @@ Darkloom facilitates agent-to-tool communication via the [Model Context Protocol
 | OpenAPI Compatibility | Naturally compatible; cloud-ready | Requires proxies (`mcp-proxy`) |
 | Security/Authentication | Supports TLS/HTTPS and proxies | Inherently insecure across environments |
 | Deployment Env | Cloud-ready; Remote Access | Filesystem access; Local-only |
+
+![MCP Transport Architecture — SSE vs stdio](imgs/07-comparison-mcp-transport.png)
 
 While SSE provides a real-time push from server to client, the Darkloom implementation requires a paired HTTP POST endpoint (e.g., `/messages/`) for the client to send data back, ensuring full bi-directional capability in distributed systems.
 
@@ -106,6 +112,8 @@ The [`policy.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/darklo
 
 Darkloom governs agent behavior through the **MAPE-K control loop** (Monitor, Analyze, Plan, Execute, Knowledge), treating the design system as infrastructure rather than a library.
 
+![MAPE-K Autonomous Self-Healing Loop](imgs/04-framework-mapek-loop.png)
+
 | Phase | Function |
 |-------|----------|
 | **Knowledge** | Central "USB for all tools" — a shared Knowledge Graph containing token taxonomy, learning history, and design principles |
@@ -123,7 +131,9 @@ Autonomy is granted based on risk vs. confidence.
 | **Senior** | Low | High | Auto-merge and Ship |
 | **Junior** | Low | Low | Draft PR / Request Human Review |
 | **Intern** | High | Low | Suggestion Only / Full Review Required |
-| **Restricted** | High | High | **Level 3: Mandatory Human Intervention** |
+| Restricted | High | High | **Level 3: Mandatory Human Intervention** |
+
+![Risk-Confidence Matrix — Agent Trust Levels](imgs/08-framework-risk-matrix.png)
 
 > **Note:** Decisions reaching Level 3 explicitly revoke agent autonomy; human judgment is mandatory regardless of agent confidence.
 

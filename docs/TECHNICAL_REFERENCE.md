@@ -391,7 +391,9 @@ Traditional security documentation lists mitigations. This module makes the audi
 
 Used by: `bridges.py` (load/save bridges), `daemon.py` (write torrc), `gateway.py` (update `~/.hermes/.env`).
 
----
+subprocess I/O, strict mode blocks the launch boundary.
+
+![Darkloom Network Policy — Central Authorization Gate](imgs/03-flowchart-network-policy.png)
 
 ## 4. Proxy Resolution Chain — Formal Verification
 
@@ -451,6 +453,8 @@ resolve_proxy_url(platform_env_var, target_hosts):
 ---
 
 ## 6. Self-Healing Topology
+
+![Self-Healing Watchdog — Layered Health Verification](imgs/05-infographic-watchdog.png)
 
 ### 6.1 TorWatchdog Design
 

@@ -79,6 +79,8 @@ python -c "import os; os.environ['TOR_ENABLED']='1'; from darkloom.proxy_http im
 
 ## Architecture
 
+![Darkloom Gateway Architecture — 23 Platforms](imgs/06-framework-gateway-architecture.png)
+
 ```
 You → VPN (Mullvad / ProtonVPN / IVPN)
         → Tor bridges (obfs4 — indistinguishable from noise)
@@ -137,6 +139,8 @@ An adversarial code review traced every outbound connection path — every subpr
 | LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — inherent to onion routing; not a code fix [[Tor Metrics]](https://metrics.torproject.org/) |
 
 All hardening is always-on. Every documented-leaky channel is blocked at the policy layer before socket creation. Gateway refuses to start if layered health check fails.
+
+![Darkloom Hardening Battery — 17 Leaks, 32 PRs, 1,405 Tests](imgs/09-infographic-hardening-battery.png)
 
 ---
 
@@ -271,7 +275,7 @@ Step 3: Hermes gateway inherits ALL_PROXY
 ## Tested
 
 - Windows 10 — Tor 15.0.19 bootstrapped in 4.5s, `check.torproject.org` confirmed
-- **102/102 unit tests passing** — up from 24 after 7 hardening PRs
+- **1,405/1,405 tests passing** — up from 24 across 32 hardening PRs
 - 2 obfs4 bridges verified working
 - Self-healing watchdog: layered health check (process + SOCKS5 + bootstrap + route), auto-restart, circuit rotation
 - Cross-platform daemon code (Windows + Linux)
@@ -514,7 +518,7 @@ WhiskeySockets. (n.d.). *Baileys: Lightweight full-featured WhatsApp Web + Multi
 
 ## Provenance
 
-Every claim in this document links to its primary source. The source code is at [`src/darkloom/`](https://github.com/andrexibiza/darkloom/tree/main/src/darkloom). 24 tests at [`tests/`](https://github.com/andrexibiza/darkloom/blob/main/tests/test_darkloom.py). Three patch files at [`patches/`](https://github.com/andrexibiza/darkloom/tree/main/patches) for Hermes-agent core. 11 auditable commits in the [commit history](https://github.com/andrexibiza/darkloom/commits/main). The hardening audit runs with `python -m darkloom.hardening audit`. The Hermes-agent source lines verified are linked inline above. Tested end-to-end on Windows 10: Tor 15.0.19 bootstrapped in 4.5s, `check.torproject.org` confirmed routing through Tor with exit IP `185.220.101.6`.
+Every claim in this document links to its primary source. The source code is at [`src/darkloom/`](https://github.com/andrexibiza/darkloom/tree/main/src/darkloom). 1,405 tests across 5 files [`tests/`](https://github.com/andrexibiza/darkloom/blob/main/tests/test_darkloom.py). Three patch files at [`patches/`](https://github.com/andrexibiza/darkloom/tree/main/patches) for Hermes-agent core. 11 auditable commits in the [commit history](https://github.com/andrexibiza/darkloom/commits/main). The hardening audit runs with `python -m darkloom.hardening audit`. The Hermes-agent source lines verified are linked inline above. Tested end-to-end on Windows 10: Tor 15.0.19 bootstrapped in 4.5s, `check.torproject.org` confirmed routing through Tor with exit IP `185.220.101.6`.
 
 ---
 

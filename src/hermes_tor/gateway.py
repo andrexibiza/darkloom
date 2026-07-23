@@ -38,6 +38,7 @@ from hermes_tor.constants import (
     BRIDGES_PATH,
     DEFAULT_SOCKS_PORT,
 )
+from hermes_tor.hardening import check_tor_health
 from hermes_tor.manager import TorManager, TorStatus
 
 logger = logging.getLogger(__name__)
@@ -53,6 +54,7 @@ GATEWAY_ENV_VARS = {
     "TOR_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
     "TOR_ENABLED": "1",
 }
+TOR_HEALTH_VAR = "TOR_HEALTH"
 
 # When TOR_SKIP_LLM=1, LLM API calls bypass Tor to avoid exit node blocking.
 # OpenAI, Anthropic, and their CDNs (Cloudflare) block known Tor exit IPs
@@ -95,6 +97,7 @@ def clear_gateway_env():
     """Remove gateway Tor environment variables."""
     for key in GATEWAY_ENV_VARS:
         os.environ.pop(key, None)
+    os.environ.pop(TOR_HEALTH_VAR, None)
     logger.info("Gateway Tor environment cleared")
 
 
@@ -127,6 +130,7 @@ def is_llm_skipped() -> bool:
 def write_gateway_env_file(
     socks_port: int = DEFAULT_SOCKS_PORT,
     env_path: Optional[Path] = None,
+    tor_healthy: bool = False,
 ):
     """Write ALL_PROXY and related vars to ~/.hermes/.env for persistent config.
 
@@ -137,6 +141,7 @@ def write_gateway_env_file(
     Args:
         socks_port: SOCKS5 port (default: 9050)
         env_path: Path to .env file (default: ~/.hermes/.env)
+        tor_healthy: Record a successful SOCKS listener health check
     """
     if env_path is None:
         env_path = Path.home() / ".hermes" / ".env"
@@ -161,6 +166,10 @@ def write_gateway_env_file(
         "TOR_ENABLED": "1",
     }
     existing.update(tor_vars)
+    if tor_healthy:
+        existing[TOR_HEALTH_VAR] = "ok"
+    else:
+        existing.pop(TOR_HEALTH_VAR, None)
 
     # Write back
     lines = []
@@ -180,7 +189,7 @@ def remove_gateway_env_file(env_path: Optional[Path] = None):
     if not env_path.exists():
         return
 
-    tor_keys = set(GATEWAY_ENV_VARS.keys())
+    tor_keys = set(GATEWAY_ENV_VARS.keys()) | {TOR_HEALTH_VAR}
     lines = []
     for line in env_path.read_text().splitlines():
         line_stripped = line.strip()
@@ -324,17 +333,20 @@ class TorWatchdog:
         # Restart
         try:
             status = self._mgr.start(timeout=60)
-            if status.state.name == "RUNNING":
+            if status.state.name == "RUNNING" and check_tor_health(self._mgr.socks_port):
                 logger.info("Tor restarted successfully (attempt %d)", self._restart_count)
                 self._restart_count = 0
 
                 # Re-inject env vars so new connections pick up the fresh proxy
                 inject_gateway_env(self._mgr.socks_port)
-                write_gateway_env_file(self._mgr.socks_port)
+                write_gateway_env_file(self._mgr.socks_port, tor_healthy=True)
 
                 self._last_restart_time = time.time()
             else:
-                logger.error("Tor restart failed: %s", status.error)
+                logger.error(
+                    "Tor restart failed or SOCKS listener unavailable: %s",
+                    status.error,
+                )
         except Exception:
             logger.exception("Tor restart raised exception")
 
@@ -384,6 +396,9 @@ def start_tor_for_gateway(
     Raises:
         TorDaemonError: If Tor fails to bootstrap
     """
+    # A health marker describes only the current successful bootstrap attempt;
+    # never carry a stale marker into a restart.
+    os.environ.pop(TOR_HEALTH_VAR, None)
     mgr = TorManager(auto_download=True, socks_port=socks_port)
 
     # Load bridges if available
@@ -400,14 +415,28 @@ def start_tor_for_gateway(
     status = mgr.start(timeout=bootstrap_timeout)
 
     if status.state.name != "RUNNING":
+        if write_env:
+            write_gateway_env_file(socks_port, tor_healthy=False)
         raise RuntimeError(f"Tor failed to start: {status.error}")
+
+    # Do not trust process state alone: a daemon can report RUNNING before its
+    # SOCKS listener is usable (or after that listener has died).  Failing here
+    # prevents the gateway from starting with a dead proxy configuration.
+    if not check_tor_health(socks_port):
+        mgr.stop()
+        if write_env:
+            write_gateway_env_file(socks_port, tor_healthy=False)
+        raise RuntimeError(
+            f"Tor proxy not available at socks5://127.0.0.1:{socks_port}"
+        )
 
     # Inject environment
     inject_gateway_env(socks_port)
+    os.environ[TOR_HEALTH_VAR] = "ok"
 
     # Persist to .env for gateway restarts
     if write_env:
-        write_gateway_env_file(socks_port)
+        write_gateway_env_file(socks_port, tor_healthy=True)
 
     logger.info(
         "Tor ready for gateway — SOCKS5 %s, circuit %s, bridges %d, uptime %.1fs",

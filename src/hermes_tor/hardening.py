@@ -205,12 +205,10 @@ register(
     "ALL_PROXY=socks5://127.0.0.1:9050. But if Tor also crashed, the proxy port "
     "is dead. Each adapter handles proxy failure differently: some fail open "
     "(connect direct), some fail closed (refuse to connect). No consistent behavior.",
-    "inject_gateway_env() now writes a health check flag to .env: TOR_HEALTH=ok "
-    "after successful bootstrap. Added gateway pre-connect hook that checks "
-    "Tor health before allowing platform connections. If Tor is dead, gateway "
-    "refuses to start and logs FATAL: 'Tor proxy not available at socks5://...'. "
-    "Added to gateway.py: start_tor_for_gateway() now sets TOR_HEALTH=ok and "
-    "clear_gateway_env() removes it.",
+    "start_tor_for_gateway() checks that the SOCKS listener accepts connections "
+    "before injecting or persisting proxy configuration. If Tor is dead, the "
+    "wrapper refuses to launch the gateway. TOR_HEALTH=ok is written only after "
+    "that check, and clear_gateway_env() removes it.",
     "Verify: kill Tor process, restart gateway — should refuse to connect",
     "hermes_tor/gateway.py"
 )
@@ -240,9 +238,9 @@ register(
     "SOCKS5 protocol proxies TCP connections. Discord voice uses UDP (port 50000+). "
     "Voice data cannot go through SOCKS5. WebRTC/voice will ALWAYS use direct UDP "
     "regardless of proxy configuration.",
-    "Documented in SKILL.md. Voice disabled by default when TOR_STRICT_MODE=1. "
-    "Added TOR_STRICT_MODE env var that blocks all known-leaky features. "
-    "Users who need voice through Tor must use a VPN with UDP support.",
+    "Documented in SKILL.md. TOR_STRICT_MODE does not control the external "
+    "Discord adapter, so voice must be disabled there. Users who need voice "
+    "through Tor must use a VPN with UDP support.",
     "This is a SOCKS5 protocol limitation — not fixable in Hermes",
     "Discord adapter (documentation only)"
 )
@@ -253,7 +251,7 @@ register(
     "SMTP (port 25/587) and IMAP (port 993) use raw TCP sockets. Hermes email "
     "adapter does not use httpx or aiohttp — it uses smtplib/imaplib which "
     "do not support SOCKS5. Email connections will ALWAYS go direct.",
-    "Documented in SKILL.md. Email should be disabled when TOR_STRICT_MODE=1. "
+    "Documented in SKILL.md. Email must be disabled separately in strict deployments. "
     "Alternative: use a SOCKS5-aware email library (aiosmtpd with proxy) or "
     "route through a system-level transparent proxy.",
     "This is a Python stdlib limitation — smtplib/imaplib don't support SOCKS5",
@@ -265,7 +263,7 @@ register(
     "IRC — raw TCP sockets, no SOCKS5 support",
     "IRC uses raw TCP sockets on port 6667/6697. Python's irc library does "
     "not support SOCKS5. IRC connections will ALWAYS go direct.",
-    "Documented in SKILL.md. IRC should be disabled when TOR_STRICT_MODE=1.",
+    "Documented in SKILL.md. IRC must be disabled separately in strict deployments.",
     "This is a protocol limitation — IRC doesn't use HTTP",
     "IRC adapter (documentation only)"
 )
@@ -280,9 +278,9 @@ register(
     "adapter's import path.",
     "Audited the three largest adapters (Telegram, Discord, WhatsApp). "
     "None make network calls at import time. All use lazy initialization. "
-    "Smaller adapters may vary — documented as a risk. TOR_STRICT_MODE=1 "
-    "delays gateway platform initialization until Tor health check passes.",
-    "Verify: start gateway with TOR_STRICT_MODE=1, check startup logs for pre-proxy connections",
+    "Smaller adapters may vary and remain a documented risk. The gateway wrapper "
+    "must be started before importing or initializing platform adapters.",
+    "Verify: launch through hermes_tor.gateway and check for pre-proxy connections",
     "All platform adapters (documentation)"
 )
 
@@ -316,8 +314,8 @@ register(
     "This is a Python-level limitation — we proxy the Python HTTP stack but "
     "cannot control subprocess network behavior.",
     "Documented mitigation: On Linux, system binaries can be wrapped with "
-    "torsocks (LD_PRELOAD). On Windows, no equivalent exists. TOR_STRICT_MODE=1 "
-    "warns when execute_code blocks spawn subprocesses. Future: restricted "
+    "torsocks (LD_PRELOAD). On Windows, no equivalent exists. Strict deployments "
+    "must prevent execute_code blocks from spawning network clients. Future: restricted "
     "network namespaces via containerization (Docker with --network=none and "
     "SOCKS5 proxy as sole egress).",
     "Verify: check if git/curl/pip calls in execute_code show Tor exit IP in network capture",
@@ -413,18 +411,18 @@ def inject_subprocess_proxy_env(env_dict: dict[str, str]) -> dict[str, str]:
 
 
 def enable_strict_mode():
-    """Enable TOR_STRICT_MODE — blocks all known-leaky features.
+    """Enable TOR_STRICT_MODE for integrations that explicitly enforce it.
 
-    When TOR_STRICT_MODE=1:
-    - Discord voice is disabled
-    - Email adapter refuses to connect
-    - IRC adapter refuses to connect
-    - Gateway refuses to start if Tor health check fails
-    - Slack logs CRITICAL warning about SOCKS5 incompatibility
-    - All platform connections require Tor proxy to be reachable
+    The hermes-tor gateway wrapper always verifies that its Tor SOCKS listener
+    is reachable before launching the gateway. External Hermes adapters do not
+    currently consume this setting, so callers must not treat it as a blanket
+    block for Discord voice, Email, IRC, or other direct network clients.
     """
     os.environ["TOR_STRICT_MODE"] = "1"
-    logger.warning("TOR_STRICT_MODE enabled — Discord voice, Email, IRC blocked")
+    logger.warning(
+        "TOR_STRICT_MODE enabled — only integrations that explicitly check it "
+        "are restricted; direct-network adapters must remain disabled"
+    )
     return True
 
 

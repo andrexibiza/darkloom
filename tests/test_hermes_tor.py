@@ -6,6 +6,61 @@ import pytest
 from pathlib import Path
 
 
+def test_gateway_env_health_flag_requires_verified_proxy(monkeypatch, tmp_path):
+    from hermes_tor import gateway
+
+    env_path = tmp_path / ".env"
+    monkeypatch.setenv("TOR_HEALTH", "ok")
+    gateway.write_gateway_env_file(env_path=env_path)
+    assert "TOR_HEALTH" not in env_path.read_text()
+
+    gateway.write_gateway_env_file(env_path=env_path, tor_healthy=True)
+    assert "TOR_HEALTH=ok" in env_path.read_text()
+
+    gateway.clear_gateway_env()
+    assert "TOR_HEALTH" not in gateway.os.environ
+
+
+def test_gateway_refuses_running_daemon_with_dead_proxy(monkeypatch, tmp_path):
+    from hermes_tor import gateway
+
+    class FakeState:
+        name = "RUNNING"
+
+    class FakeStatus:
+        state = FakeState()
+        error = None
+
+    class FakeManager:
+        stopped = False
+
+        def __init__(self, **kwargs):
+            pass
+
+        def load_bridges(self):
+            return 1
+
+        def start(self, timeout):
+            return FakeStatus()
+
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(gateway, "TorManager", FakeManager)
+    monkeypatch.setattr(gateway, "check_tor_health", lambda port: False)
+    monkeypatch.setattr(gateway.Path, "home", lambda: tmp_path)
+    env_path = tmp_path / ".hermes" / ".env"
+    env_path.parent.mkdir()
+    env_path.write_text("TOR_HEALTH=ok\n")
+    monkeypatch.setenv("TOR_HEALTH", "ok")
+
+    with pytest.raises(RuntimeError, match="Tor proxy not available"):
+        gateway.start_tor_for_gateway(write_env=True)
+
+    assert "TOR_HEALTH" not in gateway.os.environ
+    assert "TOR_HEALTH" not in env_path.read_text()
+
+
 # ── constants tests ────────────────────────────────────────────
 
 

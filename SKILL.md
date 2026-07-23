@@ -375,7 +375,7 @@ iptables -A OUTPUT -j DROP                            # Block everything else
 | LEAK-06 | ✅ FIXED | WebSocket proxy persistence — verified aiohttp_socks ProxyConnector handles full lifecycle |
 | LEAK-07 | ✅ FIXED | DNS leak — verified rdns=True on all aiohttp connectors |
 | LEAK-08 | ✅ FIXED | Slack SOCKS5 blocked — elevated to WARNING with privoxy workaround |
-| LEAK-09 | ✅ FIXED | Gateway restart race — TOR_HEALTH flag prevents startup on dead proxy |
+| LEAK-09 | ✅ FIXED | Gateway wrapper verifies the SOCKS listener before launch and records `TOR_HEALTH=ok` only after success |
 | LEAK-10 | ✅ FIXED | Platform env override — warns when empty platform var overrides ALL_PROXY |
 | LEAK-11 | 📄 DOCUMENTED | Discord voice UDP — SOCKS5 protocol limitation |
 | LEAK-12 | 📄 DOCUMENTED | Email SMTP/IMAP — Python smtplib/imaplib don't support SOCKS5 |
@@ -385,7 +385,7 @@ iptables -A OUTPUT -j DROP                            # Block everything else
 | LEAK-16 | 📄 DOCUMENTED | execute_code system binary leaks — git/curl/pip bypass proxy; use torsocks on Linux |
 | LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — use TOR_SKIP_LLM=1 for streaming, Tor for batch |
 
-**TOR_STRICT_MODE**: Set `TOR_STRICT_MODE=1` to block all documented-leaky features (Discord voice, Email, IRC). Gateway refuses to start if Tor health check fails.
+**TOR_STRICT_MODE**: This flag is available to integrations that explicitly check it; it does **not** itself block Discord voice, Email, or IRC. Keep those direct-network features disabled. The `hermes_tor.gateway` wrapper independently refuses to launch when its Tor SOCKS listener is unavailable.
 Full audit: `python -m hermes_tor.hardening audit`
 
 ## Reference

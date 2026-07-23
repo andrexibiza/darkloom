@@ -1,11 +1,11 @@
 """Tor binary downloader.
 
-Downloads the verified Tor Expert Bundle for the current platform.
-No signature verification — the bundle is served over HTTPS from
-archive.torproject.org and we pin a specific version.
+Downloads and verifies a pinned Tor Expert Bundle for the current platform.
 """
+import hashlib
 import logging
 import os
+import shutil
 import tarfile
 import tempfile
 from pathlib import Path
@@ -29,12 +29,17 @@ class DownloadError(Exception):
 def download_tor_binary(
     progress_callback=None,
     force: bool = False,
+    expected_sha256: str | None = None,
 ) -> Path:
     """Download and extract Tor Expert Bundle. Returns path to tor binary.
 
     Args:
         progress_callback: Optional callable(downloaded_bytes, total_bytes)
         force: If True, re-download even if already installed.
+        expected_sha256: SHA-256 digest obtained from a trusted source. If not
+            provided, ``HERMES_TOR_BUNDLE_SHA256`` must be set. The downloader
+            deliberately does not fetch a checksum beside the archive, since a
+            compromised download source could replace both.
 
     Returns:
         Path to the tor binary.
@@ -50,7 +55,18 @@ def download_tor_binary(
     url = get_download_url()
     logger.info("Downloading Tor Expert Bundle %s", url)
 
-    TOR_BINARY_DIR.mkdir(parents=True, exist_ok=True)
+    expected_sha256 = expected_sha256 or os.environ.get("HERMES_TOR_BUNDLE_SHA256")
+    if not expected_sha256 or len(expected_sha256) != 64:
+        raise DownloadError(
+            "A trusted SHA-256 checksum is required. Pass expected_sha256 or set "
+            "HERMES_TOR_BUNDLE_SHA256."
+        )
+    try:
+        bytes.fromhex(expected_sha256)
+    except ValueError as e:
+        raise DownloadError("The expected SHA-256 checksum is not hexadecimal") from e
+
+    TOR_BINARY_DIR.parent.mkdir(parents=True, exist_ok=True)
 
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
         tmppath = Path(tmp.name)
@@ -74,10 +90,38 @@ def download_tor_binary(
         size_mb = downloaded / (1024 * 1024)
         logger.info("Downloaded %.1f MB", size_mb)
 
-        # Extract
-        logger.info("Extracting to %s", TOR_BINARY_DIR)
-        with tarfile.open(tmppath, "r:gz") as tar:
-            tar.extractall(path=TOR_BINARY_DIR)
+        actual_sha256 = hashlib.sha256(tmppath.read_bytes()).hexdigest()
+        if actual_sha256.lower() != expected_sha256.lower():
+            raise DownloadError(
+                "Tor bundle SHA-256 mismatch: "
+                f"expected {expected_sha256.lower()}, got {actual_sha256}"
+            )
+
+        # Extract into a new directory. Only ordinary files and directories are
+        # accepted: links and special files can escape an otherwise safe path.
+        logger.info("Extracting verified bundle to %s", TOR_BINARY_DIR)
+        staging = Path(tempfile.mkdtemp(prefix="tor-bin-", dir=TOR_BINARY_DIR.parent))
+        try:
+            with tarfile.open(tmppath, "r:gz") as tar:
+                root = staging.resolve()
+                for member in tar.getmembers():
+                    destination = (staging / member.name).resolve()
+                    if root not in destination.parents and destination != root:
+                        raise DownloadError(
+                            f"Unsafe path in Tor bundle: {member.name!r}"
+                        )
+                    if not (member.isdir() or member.isreg()):
+                        raise DownloadError(
+                            f"Unsupported archive entry in Tor bundle: {member.name!r}"
+                        )
+                tar.extractall(path=staging)
+
+            if TOR_BINARY_DIR.exists():
+                shutil.rmtree(TOR_BINARY_DIR)
+            staging.replace(TOR_BINARY_DIR)
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
 
         binpath = get_tor_binary_path()
         if not binpath.exists():

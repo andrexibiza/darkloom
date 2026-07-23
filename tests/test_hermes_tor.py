@@ -3,6 +3,9 @@
 Run: uv run pytest tests/ -v
 """
 import pytest
+import hashlib
+import io
+import tarfile
 from pathlib import Path
 
 
@@ -50,6 +53,68 @@ def test_get_lyrebird_path_exists_for_current_platform():
     path = get_lyrebird_path()
     assert path.name in ("lyrebird", "lyrebird.exe")
     assert "pluggable_transports" in str(path)
+
+
+def _bundle_bytes(*members):
+    output = io.BytesIO()
+    with tarfile.open(fileobj=output, mode="w:gz") as archive:
+        for name, content, kind in members:
+            info = tarfile.TarInfo(name)
+            info.type = kind
+            info.size = len(content)
+            archive.addfile(info, io.BytesIO(content))
+    return output.getvalue()
+
+
+class _DownloadResponse:
+    status_code = 200
+    headers = {}
+
+    def __init__(self, content):
+        self.content = content
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def iter_bytes(self, chunk_size):
+        yield self.content
+
+
+def test_downloader_rejects_checksum_mismatch(monkeypatch, tmp_path):
+    from hermes_tor import downloader
+
+    content = _bundle_bytes(("tor/tor", b"payload", tarfile.REGTYPE))
+    monkeypatch.setattr(downloader, "TOR_BINARY_DIR", tmp_path / "tor-bin")
+    monkeypatch.setattr(downloader, "is_tor_installed", lambda: False)
+    monkeypatch.setattr(
+        downloader.httpx, "stream", lambda *args, **kwargs: _DownloadResponse(content)
+    )
+
+    with pytest.raises(downloader.DownloadError, match="SHA-256 mismatch"):
+        downloader.download_tor_binary(expected_sha256="0" * 64)
+    assert not (tmp_path / "tor-bin").exists()
+
+
+@pytest.mark.parametrize(
+    "name,kind", [("../escaped", tarfile.REGTYPE), ("tor/link", tarfile.SYMTYPE)]
+)
+def test_downloader_rejects_unsafe_archive_members(monkeypatch, tmp_path, name, kind):
+    from hermes_tor import downloader
+
+    content = _bundle_bytes((name, b"payload" if kind == tarfile.REGTYPE else b"", kind))
+    monkeypatch.setattr(downloader, "TOR_BINARY_DIR", tmp_path / "tor-bin")
+    monkeypatch.setattr(downloader, "is_tor_installed", lambda: False)
+    monkeypatch.setattr(
+        downloader.httpx, "stream", lambda *args, **kwargs: _DownloadResponse(content)
+    )
+
+    digest = hashlib.sha256(content).hexdigest()
+    with pytest.raises(downloader.DownloadError, match="Unsafe path|Unsupported archive"):
+        downloader.download_tor_binary(expected_sha256=digest)
+    assert not (tmp_path / "escaped").exists()
 
 
 # ── bridges tests ─────────────────────────────────────────────

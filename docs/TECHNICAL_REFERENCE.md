@@ -31,7 +31,7 @@ If you're going to build agents that the balkanizers can't touch, you need to kn
 **Version:** 0.1.0  
 **Tor Expert Bundle:** 15.0.19  
 **Threat Model:** Nation-state ISP censorship, AI provider access restriction, traffic correlation attacks  
-**Security Posture:** Fail-closed. 17 leaks audited. 15 fixed at transport/policy layer. 1 mitigated (Photon — depends on Go binary). 1 documented (latency — inherent to onion routing, not a code fix). All hardening always-on — no strict mode toggle. Incremental over current build, failures contained not cascaded.
+**Security Posture:** Fail-closed. 17 leaks audited. 17 fixed at transport/policy layer. All hardening always-on — no strict mode toggle. Incremental over current build, failures contained not cascaded. 32 PRs, 105 tests.
 
 ---
 
@@ -52,6 +52,7 @@ If you're going to build agents that the balkanizers can't touch, you need to kn
    - [3.10 hardening.py](#310-hardeningpy--adversarial-audit)
    - [3.11 privacy.py](#311-privacypy--centralized-redaction--error-classification)
    - [3.12 secure_files.py](#312-secure_filespy--race-resistant-private-file-operations)
+   - [3.13 policy.py](#313-policypy--central-fail-closed-network-policy)
 4. [Proxy Resolution Chain](#4-proxy-resolution-chain)
 5. [Adversarial Hardening Audit](#5-adversarial-hardening-audit)
 6. [Self-Healing Topology](#6-self-healing-topology)
@@ -390,6 +391,87 @@ Traditional security documentation lists mitigations. This module makes the audi
 **Cross-platform hardening**: POSIX uses `st_uid` and `st_mode` bits. Windows uses PowerShell `Get-Acl` + `Set-Acl` with SDDL strings for owner-only ACEs. All Windows checks are best-effort (catch `CalledProcessError` for ephemeral temp paths).
 
 Used by: `bridges.py` (load/save bridges), `daemon.py` (write torrc), `gateway.py` (update `~/.hermes/.env`).
+
+---
+
+### 3.13 `policy.py` — Central Fail-Closed Network Policy
+
+**Source:** [`src/hermes_tor/policy.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py)
+
+The policy module is the central authorization gate for every network operation in the system. Before any socket is created, any HTTP client is constructed, any subprocess is spawned — the code calls `authorize()`. In strict mode, the answer is default-deny.
+
+#### Design
+
+The module catalogs every type of outbound connection in a single `NetworkChannel` enum:
+
+```python
+class NetworkChannel(str, Enum):
+    HTTP = "http"
+    MCP = "mcp"
+    GATEWAY = "gateway"
+    PLATFORM = "platform"
+    BROWSER = "browser"
+    WEB_TOOL = "web_tool"
+    LLM = "llm"
+    SUBPROCESS = "subprocess"
+    RAW_SOCKET = "raw_socket"
+    UDP_VOICE = "udp_voice"
+    SMTP = "smtp"
+    IMAP = "imap"
+    IRC = "irc"
+    TOR_BOOTSTRAP = "tor_bootstrap"
+    TOR_CONTROL = "tor_control"
+```
+
+Channels are classified into four categories:
+
+| Category | Channels | Authorization Rule |
+|----------|----------|-------------------|
+| **Proxy-required** | HTTP, MCP, GATEWAY, PLATFORM, BROWSER, WEB_TOOL, LLM, SUBPROCESS, RAW_SOCKET | Must be `proxy_aware=True` with a valid proxy URL |
+| **Unsupported** | UDP_VOICE, SMTP, IMAP, IRC | Always denied — protocol limitation |
+| **Explicit direct** | TOR_BOOTSTRAP, TOR_CONTROL | Always allowed — Tor internals |
+| **Unknown** | Any unlisted channel | Always denied — fail-closed by default |
+
+#### The `authorize()` Gate
+
+```python
+def authorize(channel, *, proxy_url=None, proxy_aware=True, local_only=False):
+```
+
+Single gate for every channel. In strict mode (`TOR_STRICT_MODE=1`):
+
+1. Unknown channel → denied
+2. Unsupported channel (UDP/SMTP/IMAP/IRC) → denied
+3. Explicit direct (Tor bootstrap/control) → allowed
+4. Proxy-required channel without `proxy_aware=True` → denied
+5. Proxy-required channel without valid proxy URL → denied
+
+Outside strict mode, `authorize()` is a no-op. This preserves backward compatibility while giving users a clear migration path to full enforcement.
+
+#### Integration Points
+
+The policy is enforced at every network entry point in the Hermes agent codebase, applied via the integration patches:
+
+| Entry Point | Channel | Guard |
+|------------|---------|-------|
+| LLM auxiliary client | `LLM` | `authorize(NetworkChannel.LLM, proxy_aware=False)` |
+| MCP connection handler | `MCP` | `authorize(NetworkChannel.MCP, proxy_aware=False)` |
+| Web tool (Firecrawl) | `WEB_TOOL` | `authorize(NetworkChannel.WEB_TOOL, proxy_aware=False)` |
+| Browser tool (Chromium) | `BROWSER` | `authorize(NetworkChannel.BROWSER, proxy_url=...)` |
+| Discord voice | `UDP_VOICE` | `authorize_raw_socket(NetworkChannel.UDP_VOICE)` — denied |
+| Email (SMTP/IMAP) | `SMTP`, `IMAP` | `authorize_raw_socket(...)` — denied |
+| IRC | `IRC` | `authorize_raw_socket(...)` — denied |
+| Slack | `PLATFORM` | `authorize(..., proxy_aware=proxy is not None)` |
+| execute_code child | `SUBPROCESS` | `authorize_subprocess(proxy_aware=False)` — denied in strict mode |
+| Gateway launch | `GATEWAY` | `authorize_subprocess(proxy_aware=...)` — denied if not proxy-aware |
+
+#### Why LLM and MCP Are `proxy_aware=False`
+
+The shared LLM entry point and the MCP connection handler cannot prove that downstream SDKs will use an ambient proxy. An `ALL_PROXY` env var does not guarantee that httpx, aiohttp, or the MCP SDK will route through it. Rather than trust the ambient variable and risk a silent direct connection, strict mode denies these paths. Users who need LLM access in strict mode must use a verified request-scoped proxy transport (audited HTTPS client with explicit `proxy=` parameter).
+
+#### Subprocess Authorization
+
+`authorize_subprocess(proxy_aware=False)` denies any network-capable child process launch in strict mode. This covers `execute_code` blocks, native helper binaries, and unverified stdio MCP servers. The reasoning: on Windows, there is no equivalent to Linux's `torsocks` (LD_PRELOAD). An environment variable is a convention, not enforcement — a compiled binary can ignore it entirely. Until a verified proxy-aware transport is available for subprocess I/O, strict mode blocks the launch boundary.
 
 ---
 

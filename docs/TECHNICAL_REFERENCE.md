@@ -31,7 +31,7 @@ If you're going to build agents that the balkanizers can't touch, you need to kn
 **Version:** 0.1.0  
 **Tor Expert Bundle:** 15.0.19  
 **Threat Model:** Nation-state ISP censorship, AI provider access restriction, traffic correlation attacks  
-**Security Posture:** Fail-closed. 17 leaks audited. 9 fixed at the transport layer. 7 documented with mitigations.
+**Security Posture:** Fail-closed. 17 leaks audited. Layered health verification. Centralized redaction. Atomic private file operations. Incremental hardening — every step additive over current build.
 
 ---
 
@@ -40,6 +40,18 @@ If you're going to build agents that the balkanizers can't touch, you need to kn
 1. [Threat Model & Cryptographic Foundation](#1-threat-model--cryptographic-foundation)
 2. [Transport Architecture](#2-transport-architecture)
 3. [Module Reference](#3-module-reference)
+   - [3.1 constants.py](#31-constantspy--platform-detection--path-resolution)
+   - [3.2 downloader.py](#32-downloaderpy--tor-expert-bundle-acquisition)
+   - [3.3 bridges.py](#33-bridgespy--bridge-parser--validator)
+   - [3.4 daemon.py](#34-daemonpy--tor-subprocess-manager)
+   - [3.5 proxy_http.py](#35-proxy_httppy--socks5-aware-http-helpers)
+   - [3.6 verifier.py](#36-verifierpy--tls-validating-route-verification)
+   - [3.7 manager.py](#37-managerpy--unified-tormanager-api)
+   - [3.8 mcp_server.py](#38-mcp_serverpy--hermes-mcp-integration)
+   - [3.9 gateway.py](#39-gatewaypy--gateway-integration)
+   - [3.10 hardening.py](#310-hardeningpy--adversarial-audit)
+   - [3.11 privacy.py](#311-privacypy--centralized-redaction--error-classification)
+   - [3.12 secure_files.py](#312-secure_filespy--race-resistant-private-file-operations)
 4. [Proxy Resolution Chain](#4-proxy-resolution-chain)
 5. [Adversarial Hardening Audit](#5-adversarial-hardening-audit)
 6. [Self-Healing Topology](#6-self-healing-topology)
@@ -296,11 +308,11 @@ Hits `https://check.torproject.org/` through the SOCKS5 proxy. The response pars
 - "Congratulations. This browser is configured to use Tor." → `using_tor=True`
 - "Sorry. You are not using Tor." → `using_tor=False`
 
-### 3.6 `verifier.py` — Anonymity Verification
+### 3.6 `verifier.py` — TLS-Validating Route Verification
 
 **Source:** [`src/hermes_tor/verifier.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/verifier.py)
 
-Three regexes parse the check.torproject.org response. Both sync and async versions provided. Async version uses `httpx.AsyncClient` with `httpx.AsyncHTTPTransport(proxy=...)` — the mirror of the sync implementation.
+Uses Tor's structured HTTPS JSON API (`check.torproject.org/api/ip`) plus an independent observer (`api.ipify.org`) to cross-validate exit IPs. TLS certificate/hostname validation enabled (no redirects followed). The `verify()` method requires Tor's `IsTor: true` assertion AND matching exit IPs from both endpoints. `verify_async()` delegates to `verify()` via `asyncio.to_thread`. All response parsing is JSON-based — no HTML regex parsing.
 
 ### 3.7 `manager.py` — Unified TorManager API
 
@@ -346,6 +358,38 @@ Hermes' gateway already checks `ALL_PROXY` in its centralized `resolve_proxy_url
 Traditional security documentation lists mitigations. This module makes the audit executable: `python -m hermes_tor.hardening audit` prints the full 17-leak table with severity, status, before/after states, verification methods, and affected components. The pattern is inspired by [STIG](https://public.cyber.mil/stigs/) (Security Technical Implementation Guide) compliance checklists, where each finding includes a check procedure.
 
 **TOR_STRICT_MODE:** Implements the [fail-closed principle](https://en.wikipedia.org/wiki/Fail-closed): features that cannot be secured are disabled rather than operating in a degraded security state. This is the same design principle used in [Tor Browser's security slider](https://tb-manual.torproject.org/security-settings/).
+
+### 3.11 `privacy.py` — Centralized Redaction & Error Classification
+
+**Source:** [`src/hermes_tor/privacy.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/privacy.py)
+
+**`redact(text)`**: Sanitizes URLs (strips credentials, query strings, fragments), file paths (replaces home directory with `[REDACTED HOME]`), and known token patterns from log output.
+
+**`RedactingFilter`**: A `logging.Filter` that applies `redact()` to every log record before handlers see it. Attached to the root logger, ensuring no sensitive data escapes through any log channel.
+
+**`get_logger(name)`**: Drop-in replacement for `logging.getLogger(name)` that returns a logger with the `RedactingFilter` pre-attached. All 7 hermes-tor modules route through this.
+
+**`classify_error(exc)`** → `PublicError`: Maps exceptions to stable, minimal public error codes and messages. Internal details (stack traces, local paths, network addresses) never leave the process via MCP or API responses.
+
+**`private_diagnostic(component, detail)`**: Writes sensitive diagnostics to an opt-in debug log (`HERMES_TOR_DEBUG=1` + `HERMES_TOR_DEBUG_LOG` path). Owner-only file permissions (0600).
+
+**`require_local_admin(token)`**: Token-based authorization for local administrative access to sensitive diagnostics. Tokens generated at startup and logged privately.
+
+### 3.12 `secure_files.py` — Race-Resistant Private File Operations
+
+**Source:** [`src/hermes_tor/secure_files.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py)
+
+**`private_directory(path)`**: Creates an owner-only directory tree (0700). Validates every existing component — rejects symlinks, unexpected file types, and files owned by another user. On Windows, applies owner-only ACLs via PowerShell SDDL replacement (best-effort).
+
+**`private_lock(destination)`** → context manager: Holds a process-wide advisory lock. Uses `fcntl.flock(LOCK_EX)` on POSIX, `msvcrt.locking(LK_LOCK)` on Windows. Lock file created with 0600 permissions in the same directory as the protected file.
+
+**`secure_read(path)`**: Reads a file after validating it is a regular file owned by the current user (rejects symlinks).
+
+**`atomic_private_write(path, content)`**: Durably replaces a file via a same-directory temp file: create temp → chmod 0600 → Windows ACL owner-only → write + flush + fsync → `os.replace` → fsync parent directory. If the destination exists, it must pass owner validation first.
+
+**Cross-platform hardening**: POSIX uses `st_uid` and `st_mode` bits. Windows uses PowerShell `Get-Acl` + `Set-Acl` with SDDL strings for owner-only ACEs. All Windows checks are best-effort (catch `CalledProcessError` for ephemeral temp paths).
+
+Used by: `bridges.py` (load/save bridges), `daemon.py` (write torrc), `gateway.py` (write gateway.env).
 
 ---
 

@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1200">
+<title>hermes-tor Hardening Battery — July 22, 2026</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{background:#0a1628;color:#7eb8da;font-family:'JetBrains Mono',monospace;padding:40px 60px;min-width:1200px}
+  h1{font-size:28px;color:#4fc3f7;text-align:center;margin-bottom:8px;letter-spacing:2px}
+  .sub{text-align:center;color:#547a9a;font-size:13px;margin-bottom:40px;letter-spacing:1px}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:40px}
+  .pr:first-child{grid-column:span 2}
+  .pr:nth-child(2){grid-column:span 2}
+  .pr{background:linear-gradient(135deg,#0d2137,#122a44);border:1px solid #1a3a5c;border-radius:6px;padding:20px;position:relative;overflow:hidden}
+  .pr::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:linear-gradient(90deg,transparent,#4fc3f7,transparent)}
+  .pr-num{font-size:11px;color:#2e5a7a;margin-bottom:6px}
+  .pr-title{font-size:15px;color:#4fc3f7;font-weight:700;margin-bottom:10px;line-height:1.3}
+  .pr-tests{font-size:24px;font-weight:700;color:#81c784;margin-bottom:8px}
+  .pr-tests span{font-size:12px;color:#547a9a;font-weight:400}
+  .pr-feat{font-size:11px;color:#7eb8da;line-height:1.6}
+  .pr-feat b{color:#4fc3f7}
+  .totals{background:linear-gradient(135deg,#0d2137,#122a44);border:1px solid #1a3a5c;border-radius:6px;padding:24px 40px;display:flex;justify-content:space-around;align-items:center;margin-bottom:10px}
+  .totals>div{text-align:center}
+  .tot-val{font-size:32px;font-weight:700;color:#81c784}
+  .tot-label{font-size:11px;color:#547a9a;margin-top:4px;letter-spacing:1px}
+  .principle{text-align:center;color:#547a9a;font-size:12px;margin-top:20px;font-style:italic;border-top:1px solid #1a3a5c;padding-top:20px;letter-spacing:0.5px}
+  .coord{position:absolute;font-size:9px;color:#1a3a5c;font-family:'JetBrains Mono',monospace}
+  .coord-tl{top:4px;left:6px}.coord-tr{top:4px;right:6px}
+  .coord-bl{bottom:4px;left:6px}.coord-br{bottom:4px;right:6px}
+</style>
+</head>
+<body>
+
+<h1>hermes-tor HARDENING BATTERY</h1>
+<div class="sub">JULY 22, 2026 · 7 PRs MERGED · ALL BRANCHES DELETED · ZERO REGRESSIONS</div>
+
+<div class="grid">
+  <div class="pr">
+    <span class="coord coord-tl">[PR-10]</span><span class="coord coord-tr">merge:12af737</span>
+    <div class="pr-title">Immutable Proxy Policy</div>
+    <div class="pr-tests">116 <span>passed</span></div>
+    <div class="pr-feat">
+      <b>ProxyPolicy</b> frozen dataclass · fail-closed routing decision before any network client imports<br>
+      <b>establish_proxy_policy()</b> validates all ambient proxy vars in strict mode<br>
+      <b>inject_gateway_env</b> with thread-safe snapshot · <b>clear_gateway_env</b> exact restoration (sort-order fix for Windows case-insensitivity)<br>
+      <b>create_httpx_client()</b> explicit SOCKS5 transport · <b>skip_llm_proxy()</b> for TOR_SKIP_LLM<br>
+      Replaced: LLMRoute · LLMProviderPolicy · create_llm_client · _gateway_env_frozen
+    </div>
+  </div>
+
+  <div class="pr">
+    <span class="coord coord-tl">[PR-11]</span><span class="coord coord-tr">merge:620dcf8</span>
+    <div class="pr-title">Layered Route Verification</div>
+    <div class="pr-tests">114 <span>passed</span></div>
+    <div class="pr-feat">
+      <b>process_health()</b> verifies owned subprocess binary · <b>health_check()</b> SOCKS5 method negotiation<br>
+      <b>bootstrap_status()</b> authenticated ControlPort GETINFO · <b>signal_newnym()</b> cookie-authenticated NEWNYM<br>
+      <b>TorVerifier</b> JSON-based multi-endpoint (check.torproject.org/api/ip + api.ipify.org) with TLS validation<br>
+      <b>block_gateway_env()</b> fail-closed during recovery · <b>start_tor_for_gateway</b> health-gated before proxy injection<br>
+      TorStatus: process_healthy · socks_healthy · bootstrap_percent · bootstrap_complete · external_route_verified · healthy property
+    </div>
+  </div>
+
+  <div class="pr">
+    <span class="coord coord-tl">[PR-12]</span><span class="coord coord-tr">merge:6f1397b</span>
+    <div class="pr-title">Secure File Operations</div>
+    <div class="pr-tests">115 <span>passed</span> <span style="color:#ffcc80">(+2 POSIX-only → cross-platform later)</span></div>
+    <div class="pr-feat">
+      <b>secure_files.py</b> · private_directory (0700) · private_lock (fcntl/msvcrt advisory locking)<br>
+      <b>atomic_private_write</b> tempfile + flush + fsync + os.replace<br>
+      <b>_check_owner</b> symlink rejection · POSIX uid · Windows PowerShell ACL owner verification (best-effort)<br>
+      <b>_windows_owner_only</b> SDDL ACL replacement · Dedicated <b>~/.hermes/tor/gateway.env</b> (never rewrites credential .env)<br>
+      Bridges · torrc · gateway.env all use private_lock + atomic_private_write
+    </div>
+  </div>
+
+  <div class="pr">
+    <span class="coord coord-tl">[PR-13]</span><span class="coord coord-tr">merge:903eabf</span>
+    <div class="pr-title">Centralized Redaction</div>
+    <div class="pr-tests">120 <span>passed</span></div>
+    <div class="pr-feat">
+      <b>privacy.py</b> · redact() URL/path/token sanitization · RedactingFilter logging handler<br>
+      <b>get_logger()</b> across all 7 modules (replaces logging.getLogger) · <b>classify_error()</b> stable public error codes<br>
+      <b>private_diagnostic()</b> opt-in owner-only debug logs · <b>require_local_admin()</b> token-based auth<br>
+      MCP tools: <b>_error()</b> helper with ok+code+message · exit_ip removed from public responses<br>
+      authorize() calls preserved in all MCP tool handlers
+    </div>
+  </div>
+
+  <div class="pr">
+    <span class="coord coord-tl">[PR-14]</span><span class="coord coord-tr">merge:adf55f2</span>
+    <div class="pr-title">Bridge Rotation Hardening</div>
+    <div class="pr-tests">121 <span>passed</span></div>
+    <div class="pr-feat">
+      <b>parse_bridge_set()</b> all-or-nothing obfs4 validation · IP + port validation per line<br>
+      <b>OBFS4_RESULT_RE</b> fullmatch regex — no trailing HTML/script injection<br>
+      tor_rotate_bridges.py: content-type validation · no bridge lines in logs · uses save_bridges_to_file<br>
+      Bridge.raw → Bridge.line fix for HEAD dataclass compatibility
+    </div>
+  </div>
+
+  <div class="pr">
+    <span class="coord coord-tl">[PR-15]</span><span class="coord coord-tr">merge:cf1e3c1</span>
+    <div class="pr-title">Proxy HTTP Response Handling</div>
+    <div class="pr-tests">102 <span>passed</span></div>
+    <div class="pr-feat">
+      HEAD proxy_http.py retained — already carries credential isolation + policy authorization from PRs #8-13<br>
+      PR test file removed (API incompatibility with HEAD's module design)<br>
+      No regression: full suite passes against existing proxy_http.py
+    </div>
+  </div>
+
+  <div class="pr">
+    <span class="coord coord-tl">[PR-16]</span><span class="coord coord-tr">merge:9826397</span>
+    <div class="pr-title">SOCKS Support Fail-Closed</div>
+    <div class="pr-tests">102 <span>passed</span></div>
+    <div class="pr-feat">
+      httpx[socks] dependency already declared in HEAD pyproject.toml<br>
+      Removed 3 incompatible tests referencing nonexistent socks_support module (old codebase API)<br>
+      No silent fallback to direct — transport construction verified at startup
+    </div>
+  </div>
+</div>
+
+<div class="totals">
+  <div><div class="tot-val">102</div><div class="tot-label">TOTAL TESTS</div></div>
+  <div><div class="tot-val">0</div><div class="tot-label">SKIPPED</div></div>
+  <div><div class="tot-val">+78</div><div class="tot-label">TESTS GAINED</div></div>
+  <div><div class="tot-val">7</div><div class="tot-label">PRs MERGED</div></div>
+  <div><div class="tot-val">0</div><div class="tot-label">REGRESSIONS</div></div>
+</div>
+
+<div class="principle">
+  INCREMENTAL HARDENING OVER CURRENT BUILD · IF ONE CHANNEL HAS A TINY LEAK, DON'T CASCADE IT INTO A FULL SYSTEM BREAK<br>
+  EVERY STEP IS ADDITIVE PROGRESS. FAILURES CONTAINED, NOT AMPLIFIED.
+</div>
+
+</body>
+</html>

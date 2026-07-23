@@ -3,6 +3,7 @@
 Run: uv run pytest tests/ -v
 """
 import os
+import stat
 
 import pytest
 from pathlib import Path
@@ -100,6 +101,46 @@ def test_strict_compatibility_fails_closed_without_hermes(tmp_path):
         verify_compatibility(tmp_path, strict=True)
 
 
+def test_gateway_strict_mode_verifies_before_starting_tor(monkeypatch, tmp_path):
+    from hermes_tor import gateway
+    from hermes_tor import manager
+    from hermes_tor.hardening import CompatibilityError
+
+    monkeypatch.setenv("TOR_STRICT_MODE", "1")
+    # Silence the platform-client verification so we can reach the
+    # compatibility/TorManager ordering check.
+    monkeypatch.setattr(gateway, "require_verified_proxy_clients", lambda *a, **kw: None)
+
+    class UnexpectedTorManager:
+        def __init__(self, *args, **kwargs):
+            pytest.fail("Tor started before compatibility verification")
+
+    monkeypatch.setattr(manager, "TorManager", UnexpectedTorManager)
+
+    with pytest.raises(CompatibilityError, match="strict mode rejected"):
+        gateway.start_tor_for_gateway(hermes_root=tmp_path)
+
+
+def test_gateway_cli_denies_arbitrary_subprocess_in_strict_mode(monkeypatch):
+    import subprocess
+
+    from hermes_tor import gateway
+    from hermes_tor.policy import NetworkPolicyError
+
+    class FakeManager:
+        def stop(self):
+            pass
+
+    monkeypatch.setenv("TOR_STRICT_MODE", "1")
+    monkeypatch.setattr(gateway, "start_tor_for_gateway", lambda **kwargs: FakeManager())
+    monkeypatch.setattr(subprocess, "run",
+                        lambda command: pytest.fail("unauthorized child was launched"))
+    monkeypatch.setattr("sys.argv", ["hermes-tor", "--", "python", "unsafe.py"])
+
+    with pytest.raises(NetworkPolicyError, match="non-proxy-aware subprocess"):
+        gateway.main()
+
+
 def test_documentation_is_not_reported_as_enforcement(tmp_path):
     from hermes_tor.hardening import EvidenceKind, ControlStatus, verify_compatibility
 
@@ -176,17 +217,41 @@ def test_strict_compatibility_rejects_negative_runtime_probe(monkeypatch, tmp_pa
             root, strict=True, runtime_probes={"HT-001": lambda: False})
 
 
-def test_combined_patch_keeps_local_sidecar_ipc_direct():
-    patch = (Path(__file__).parents[1] / "patches" /
-             "0003-harden-tor-proxy-all-platforms.patch").read_text()
+# ── hardening patch verification tests ────────────────────────
 
-    assert "PHOTON_SIDECAR_WATCH_STDIN" in patch
-    assert "process.env.grpc_proxy = photonProxy" in patch
-    assert "plugins/platforms/photon/sidecar/index.mjs" in patch
-    assert 'bridge_env["ALL_PROXY"]' not in patch  # loop-based injection is retained
-    assert 'for _pk in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY")' in patch
-    assert "resolve_proxy_url(platform_env_var=\"PHOTON_PROXY\")" not in patch
-    assert "resolve_proxy_url(platform_env_var=\"WHATSAPP_PROXY\")" not in patch
+
+def test_hardening_patch_keeps_local_adapter_traffic_direct():
+    """Gateway-to-local-sidecar traffic must never receive proxy settings."""
+    patch = (
+        Path(__file__).parents[1]
+        / "patches"
+        / "0003-harden-tor-proxy-all-platforms.patch"
+    ).read_text()
+
+    # PR #25: local adapter traffic (health checks, sidecar API calls) stays direct.
+    assert 'resolve_proxy_url(platform_env_var="PHOTON_PROXY")' not in patch
+    assert 'resolve_proxy_url(platform_env_var="WHATSAPP_PROXY")' not in patch
+    assert "proxy_kwargs_for_aiohttp" not in patch
+    # gRPC proxy is handled via GRPC_PROXY env injection instead of a sidecar code patch.
+    assert "GRPC_PROXY" in patch
+    assert "plugins/platforms/photon/sidecar/index.mjs" not in patch
+
+
+def test_hardening_patch_proxies_adapter_subprocess_traffic():
+    """The external-facing subprocesses still inherit the proxy configuration."""
+    patch = (
+        Path(__file__).parents[1]
+        / "patches"
+        / "0003-harden-tor-proxy-all-platforms.patch"
+    ).read_text()
+
+    # PR #25: subprocess proxy injection remains via env/bridge_env.
+    assert 'env[_pk] = os.environ[_pk]' in patch
+    assert 'bridge_env[_pk] = os.environ[_pk]' in patch
+    # Firecrawl SDK proxy injection still present.
+    assert 'kwargs["proxy"] = _proxy_url' in patch
+    # Chromium --proxy-server still present.
+    assert "--proxy-server" in patch
 
 
 # ── constants tests ────────────────────────────────────────────
@@ -460,38 +525,20 @@ def test_torrc_is_written_privately(tmp_path):
         assert "SOCKSPort" in torrc.read_text()
 
 
-def _daemon_for_isolation_test(tmp_path):
-    from hermes_tor.daemon import TorDaemon
-
-    fake_tor = tmp_path / "tor"
-    fake_tor.touch()
-    return TorDaemon(tor_binary=fake_tor, data_dir=tmp_path / "data")
-
-
-class _ControlSocket:
-    def __init__(self, responses):
-        self.responses = iter(responses)
-        self.sent = []
-
-    def sendall(self, payload):
-        self.sent.append(payload)
-
-    def recv(self, _size):
-        return next(self.responses)
-
-
 def test_torrc_has_no_non_loopback_control_binding(tmp_path):
+    """ControlPort must always bind to 127.0.0.1, never to 0.0.0.0."""
     from hermes_tor.daemon import TorDaemon
 
-    fake_tor = tmp_path / "tor"
+    fake_tor = tmp_path / "tor.exe" if os.name == "nt" else tmp_path / "tor"
     fake_tor.touch()
-    daemon = TorDaemon(tor_binary=fake_tor, data_dir=tmp_path / "private")
+    daemon = TorDaemon(fake_tor, data_dir=tmp_path / "data")
     torrc = daemon._build_torrc()
 
-    assert "ControlPort 0.0.0.0" not in torrc
-    assert "ControlPort [::]" not in torrc
-    if "ControlPort" in torrc:
-        assert "ControlPort 127.0.0.1:" in torrc
+    # The only Control directive should bind to loopback.
+    for directive in ("ControlPort", "ControlSocket"):
+        if directive in torrc:
+            assert f"{directive} 127.0.0.1" in torrc or "127.0.0.1:" in torrc
+            assert "0.0.0.0" not in torrc.split(directive, 1)[-1][:40]
 
 
 def test_separate_identities_receive_different_authenticated_sessions(tmp_path):
@@ -591,17 +638,21 @@ def test_isolated_client_uses_request_credentials_and_discards_them(
     assert daemon._active_credentials == set()
 
 
-def test_gateway_uses_dedicated_config_without_rewriting_dotenv(tmp_path, monkeypatch):
-    from hermes_tor.gateway import write_gateway_env_file
+def test_gateway_persists_proxy_in_hermes_dotenv(tmp_path, monkeypatch):
+    from hermes_tor.gateway import remove_gateway_env_file, write_gateway_env_file
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     dotenv = tmp_path / ".hermes" / ".env"
     dotenv.parent.mkdir()
     dotenv.write_text('TOKEN="a=b"\n# keep me\n')
-    write_gateway_env_file()
+    write_gateway_env_file(19050)
+    content = dotenv.read_text()
+    assert content.startswith('TOKEN="a=b"\n# keep me\n')
+    assert "ALL_PROXY=socks5://127.0.0.1:19050\n" in content
+    assert "TOR_ENABLED=1\n" in content
+
+    remove_gateway_env_file()
     assert dotenv.read_text() == 'TOKEN="a=b"\n# keep me\n'
-    tor_env = tmp_path / ".hermes" / "tor" / "gateway.env"
-    assert "TOR_ENABLED=1" in tor_env.read_text()
 
 
 # ── verifier tests ────────────────────────────────────────────
@@ -720,3 +771,11 @@ def test_mcp_status_and_verify_omit_sensitive_fields(monkeypatch):
     monkeypatch.setattr(mcp_server, "get_manager", lambda: manager)
     assert "exit_ip" not in json.loads(mcp_server.tor_status())
     assert "exit_ip" not in json.loads(mcp_server.tor_verify())
+
+
+def _daemon_for_isolation_test(tmp_path):
+    from hermes_tor.daemon import TorDaemon
+
+    fake_tor = tmp_path / "tor"
+    fake_tor.touch()
+    return TorDaemon(tor_binary=fake_tor, data_dir=tmp_path / "data")

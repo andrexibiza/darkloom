@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sys
 import threading
 import time
@@ -45,6 +46,8 @@ from hermes_tor.constants import (
 )
 if TYPE_CHECKING:
     from hermes_tor.manager import TorManager
+
+from hermes_tor.policy import authorize_subprocess
 
 from hermes_tor.secure_files import atomic_private_write, private_lock
 
@@ -314,65 +317,81 @@ def is_llm_skipped() -> bool:
     return os.environ.get("TOR_SKIP_LLM", "").lower() in ("1", "true", "yes")
 
 
+def _dotenv_assignment(line: str) -> Optional[str]:
+    """Return the key for a simple dotenv assignment, if present."""
+    candidate = line.lstrip()
+    if candidate.startswith("export "):
+        candidate = candidate[7:].lstrip()
+    key, separator, _ = candidate.partition("=")
+    return key.strip() if separator else None
+
+
 def write_gateway_env_file(
     socks_port: int = DEFAULT_SOCKS_PORT,
     env_path: Optional[Path] = None,
     healthy: bool = True,
 ):
-    """Write proxy vars to a dedicated private Tor environment file.
-
-    Keeping Tor values separate avoids parsing or rewriting the gateway's
-    credential-bearing ``~/.hermes/.env`` file.
+    """Persist proxy vars in the environment file loaded by Hermes.
 
     Args:
         socks_port: SOCKS5 port (default: 9050)
-        env_path: Path to .env file (default: ~/.hermes/tor/gateway.env)
+        env_path: Path to .env file (default: ~/.hermes/.env)
         healthy: If False, TOR_ENABLED and TOR_HEALTH are set to 0
     """
     if env_path is None:
-        env_path = Path.home() / ".hermes" / "tor" / "gateway.env"
+        env_path = Path.home() / ".hermes" / ".env"
 
     proxy_url = f"socks5://127.0.0.1:{socks_port}"
 
-    # Read existing .env content
-    existing = {}
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, value = line.partition("=")
-                existing[key.strip()] = value.strip()
-
-    # Merge Tor proxy vars (preserve existing non-Tor vars)
     tor_vars = _policy_environment(
-        ProxyPolicy(proxy_url, strict=False), environment=existing
+        ProxyPolicy(proxy_url, strict=False), environment={}
     )
     tor_vars["TOR_HEALTH"] = "1" if healthy else "0"
     if not healthy:
         tor_vars["TOR_ENABLED"] = "0"
-    existing.update(tor_vars)
-
-    # Write back — atomic private write so readers see either complete version
-    lines = []
-    for key, value in sorted(existing.items()):
-        lines.append(f"{key}={value}")
-    content = "\n".join(lines) + "\n"
-
+    # Preserve credentials, comments, quoting, and ordering byte-for-byte. Only
+    # replace assignments owned by this integration, then append fresh values.
     with private_lock(env_path):
+        if env_path.is_symlink():
+            raise OSError(f"refusing symbolic link: {env_path}")
+        existing_lines = (
+            env_path.read_text().splitlines(keepends=True) if env_path.exists() else []
+        )
+        retained = [
+            line for line in existing_lines if _dotenv_assignment(line) not in tor_vars
+        ]
+        if retained and not retained[-1].endswith(("\n", "\r")):
+            retained[-1] += "\n"
+        content = "".join(retained) + "".join(
+            f"{key}={value}\n" for key, value in sorted(tor_vars.items())
+        )
         atomic_private_write(env_path, content)
     logger.info("Gateway Tor config written to %s (%d vars)", env_path, len(tor_vars))
 
 
 def remove_gateway_env_file(env_path: Optional[Path] = None):
-    """Remove the dedicated Tor proxy environment file."""
+    """Remove Tor-owned settings from the Hermes environment file."""
     if env_path is None:
-        env_path = Path.home() / ".hermes" / "tor" / "gateway.env"
+        env_path = Path.home() / ".hermes" / ".env"
 
     with private_lock(env_path):
         if env_path.is_symlink():
             raise OSError(f"refusing symbolic link: {env_path}")
         if env_path.exists():
-            env_path.unlink()
+            managed = set(
+                _policy_environment(
+                    ProxyPolicy(
+                        f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}", strict=False
+                    ),
+                    environment={},
+                )
+            ) | {"TOR_HEALTH"}
+            content = "".join(
+                line
+                for line in env_path.read_text().splitlines(keepends=True)
+                if _dotenv_assignment(line) not in managed
+            )
+            atomic_private_write(env_path, content)
     logger.info("Gateway Tor config removed from %s", env_path)
 
 
@@ -546,6 +565,9 @@ def start_tor_for_gateway(
     socks_port: int = DEFAULT_SOCKS_PORT,
     bootstrap_timeout: float = 60.0,
     write_env: bool = True,
+    *,
+    hermes_root=None,
+    runtime_probes=None,
 ) -> TorManager:
     """Start Tor and inject gateway-wide proxy environment.
 
@@ -556,6 +578,10 @@ def start_tor_for_gateway(
         socks_port: SOCKS5 port (default: 9050)
         bootstrap_timeout: Max seconds to wait for Tor bootstrap
         write_env: If True, persist ALL_PROXY to ~/.hermes/.env
+        hermes_root: Hermes checkout to verify (defaults to automatic discovery)
+        runtime_probes: Mapping of control IDs to zero-argument verification
+            callables. Strict mode requires probes for controls that cannot be
+            established from the installed files alone.
 
     Returns:
         TorManager instance (call .stop() to shut down)
@@ -578,6 +604,17 @@ def start_tor_for_gateway(
     require_verified_proxy_clients(
         policy, *(name.removesuffix("_PROXY").lower() for name in _PLATFORM_PROXY_NAMES)
     )
+
+    # Validate Hermes integrations before Tor bootstrap.
+    # Strict mode fails closed before Hermes can establish any connections.
+    from hermes_tor.hardening import verify_compatibility
+
+    compatibility = verify_compatibility(
+        hermes_root, strict=None, runtime_probes=runtime_probes)
+    for result in compatibility:
+        logger.info("Hermes control %s: %s (%s)", result.control.id,
+                    result.status.value, result.evidence.value)
+
     from hermes_tor.manager import TorManager
 
     mgr = TorManager(auto_download=not policy.strict, socks_port=socks_port)
@@ -636,6 +673,24 @@ def start_tor_for_gateway(
     mgr._watchdog = watchdog
 
     return mgr
+
+
+def _is_proxy_aware_gateway_command(command: list[str]) -> bool:
+    """Return whether *command* is the installed Hermes gateway launcher.
+
+    Arbitrary executables may ignore proxy environment variables, so strict
+    mode only authorizes the known Hermes gateway entry point.
+    """
+    if len(command) < 3 or command[1:3] != ["gateway", "run"]:
+        return False
+    executable = shutil.which(command[0])
+    if executable is None:
+        return False
+    try:
+        launcher = Path(executable).read_text(encoding="utf-8", errors="ignore")
+    except (OSError, UnicodeError):
+        return False
+    return "hermes_cli" in launcher and "import main" in launcher
 
 
 # ── CLI entry point ────────────────────────────────────────────
@@ -705,6 +760,7 @@ def main():
 
     # Exec the gateway
     try:
+        authorize_subprocess(proxy_aware=_is_proxy_aware_gateway_command(gateway_cmd))
         result = subprocess.run(gateway_cmd)
         sys.exit(result.returncode)
     finally:

@@ -3,7 +3,7 @@
   <img src="https://img.shields.io/badge/leaks_fixed-17/17-brightgreen" alt="17/17 leaks fixed">
   <img src="https://img.shields.io/badge/gaps-0%20leaks%20remain-brightgreen" alt="All leaks addressed">
   <img src="https://img.shields.io/badge/platforms-23-blue" alt="23 platforms">
-  <img src="https://img.shields.io/badge/tests-105/105-green" alt="105/105 tests">
+  <img src="https://img.shields.io/badge/tests-1405/1405-green" alt="1405/1405 tests">
   <img src="https://img.shields.io/badge/PRs-32-orange" alt="32 PRs">
   <img src="https://img.shields.io/badge/license-MIT-yellow" alt="MIT">
   <img src="https://img.shields.io/badge/references-46%20sources-blueviolet" alt="46 cited sources">

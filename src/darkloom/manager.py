@@ -1,10 +1,10 @@
-"""Unified TorManager — the main entry point for hermes-tor.
+"""Unified TorManager — the main entry point for darkloom.
 
 Ties together download, daemon, bridges, and verification into a
 single API with a state machine.
 
 Usage:
-    from hermes_tor.manager import TorManager
+    from darkloom.manager import TorManager
 
     mgr = TorManager(auto_download=True)
     mgr.load_bridges()  # from ~/.hermes/tor/bridges.txt
@@ -20,7 +20,7 @@ from enum import Enum, auto
 from pathlib import Path
 from typing import Optional
 
-from hermes_tor.constants import (
+from darkloom.constants import (
     DATA_DIR,
     BRIDGES_PATH,
     DEFAULT_SOCKS_PORT,
@@ -28,23 +28,23 @@ from hermes_tor.constants import (
     is_tor_installed,
     get_tor_binary_path,
 )
-from hermes_tor.daemon import TorDaemon, TorDaemonError
-from hermes_tor.bridges import (
+from darkloom.daemon import TorDaemon, TorDaemonError
+from darkloom.bridges import (
     load_bridges_from_file,
     save_bridges_to_file,
     format_bridges_for_torrc,
     Bridge,
     parse_bridge_line,
 )
-from hermes_tor.downloader import (
+from darkloom.downloader import (
     DownloadError,
     download_tor_binary,
     validate_installed_binary,
 )
-from hermes_tor.verifier import TorVerifier, VerificationResult
-from hermes_tor.socks_support import require_socks_support
+from darkloom.verifier import TorVerifier, VerificationResult
+from darkloom.socks_support import require_socks_support
 
-from hermes_tor.privacy import classify_error, get_logger, private_diagnostic
+from darkloom.privacy import classify_error, get_logger, private_diagnostic
 
 logger = get_logger(__name__)
 
@@ -158,7 +158,7 @@ class TorManager:
             if not self.auto_download:
                 raise TorDaemonError(
                     "Tor not installed and auto_download=False. "
-                    "Run: hermes-tor download  or set auto_download=True."
+                    "Run: darkloom download  or set auto_download=True."
                 )
             logger.info("Tor not installed — downloading...")
             return download_tor_binary()

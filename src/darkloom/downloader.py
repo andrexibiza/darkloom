@@ -15,7 +15,7 @@ from typing import Mapping
 
 import httpx
 
-from hermes_tor.constants import (
+from darkloom.constants import (
     CURRENT_ARCH,
     CURRENT_PLATFORM,
     TOR_BINARY_DIR,
@@ -32,7 +32,7 @@ from hermes_tor.constants import (
 # from tar headers, before writing anything, also prevents sparse/zip bombs.
 MAX_EXPANDED_SIZE = 512 * 1024 * 1024
 
-from hermes_tor.privacy import get_logger
+from darkloom.privacy import get_logger
 
 logger = get_logger(__name__)
 
@@ -220,7 +220,7 @@ def _verify_signature(artifact: Path, signature: Path) -> str:
     """Verify a detached signature in an isolated keyring and return its signer."""
     if not TOR_RELEASE_SIGNING_KEY.is_file():
         raise DownloadError("Bundled Tor release signing key is missing")
-    with tempfile.TemporaryDirectory(prefix="hermes-tor-gpg-") as home:
+    with tempfile.TemporaryDirectory(prefix="darkloom-gpg-") as home:
         home_path = Path(home)
         home_path.chmod(0o700)
         base = ["gpg", "--batch", "--no-tty", "--homedir", home]

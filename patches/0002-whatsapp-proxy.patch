@@ -1,4 +1,4 @@
-From: hermes-tor integration
+From: darkloom integration
 Subject: [PATCH] whatsapp: route aiohttp sessions through gateway proxy resolver
 
 WhatsApp adapter creates aiohttp.ClientSession instances without
@@ -10,7 +10,7 @@ to all aiohttp session creation sites, using the WHATSAPP_PROXY
 env var (with fallback to ALL_PROXY/HTTPS_PROXY/HTTP_PROXY).
 
 Fixes: whatsapp adapter bypassing gateway-level Tor proxy
-Related: hermes-tor gateway integration
+Related: darkloom gateway integration
 ---
  plugins/platforms/whatsapp/adapter.py | 27 ++++++++++++++++++++-------
  1 file changed, 20 insertions(+), 7 deletions(-)

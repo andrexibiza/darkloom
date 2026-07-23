@@ -17,7 +17,7 @@ import sys
 import time
 from pathlib import Path
 
-from hermes_tor.bridges import parse_bridge_set, save_bridges_to_file
+from darkloom.bridges import parse_bridge_set, save_bridges_to_file
 
 BRIDGES_PATH = Path.home() / ".hermes" / "tor" / "bridges.txt"
 

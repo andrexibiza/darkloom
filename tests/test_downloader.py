@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from hermes_tor.downloader import (
+from darkloom.downloader import (
     BundleManifest,
     DownloadError,
     _atomic_install,

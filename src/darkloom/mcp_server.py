@@ -1,7 +1,7 @@
 """MCP server exposing Tor management tools to Hermes.
 
 Register with:
-    hermes mcp add hermes-tor --command "python -m hermes_tor.mcp_server"
+    hermes mcp add darkloom --command "python -m darkloom.mcp_server"
 
 Provides 6 tools:
     tor_download    — Download Tor Expert Bundle
@@ -15,11 +15,11 @@ import json
 import sys
 from pathlib import Path
 
-from hermes_tor.manager import TorManager, TorState
-from hermes_tor.constants import BRIDGES_PATH
-from hermes_tor.policy import NetworkChannel, authorize
-from hermes_tor.privacy import classify_error, private_diagnostic, require_local_admin
-from hermes_tor.privacy import get_logger
+from darkloom.manager import TorManager, TorState
+from darkloom.constants import BRIDGES_PATH
+from darkloom.policy import NetworkChannel, authorize
+from darkloom.privacy import classify_error, private_diagnostic, require_local_admin
+from darkloom.privacy import get_logger
 
 logger = get_logger(__name__)
 
@@ -259,7 +259,7 @@ def serve():
     """Run the MCP server via stdio.
 
     Hermes connects via:
-      hermes mcp add hermes-tor --command "python -m hermes_tor.mcp_server"
+      hermes mcp add darkloom --command "python -m darkloom.mcp_server"
     """
     try:
         from mcp.server import Server
@@ -272,7 +272,7 @@ def serve():
         )
         sys.exit(1)
 
-    server = Server("hermes-tor")
+    server = Server("darkloom")
 
     for tool_def in TOOLS:
         handler = HANDLERS[tool_def["name"]]

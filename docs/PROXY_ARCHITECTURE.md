@@ -40,7 +40,7 @@ When `ALL_PROXY=socks5://127.0.0.1:9050` is set in the environment before the ga
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  1. Start Tor daemon                                     │
-│     hermes-tor starts tor.exe with bridges               │
+│     darkloom starts tor.exe with bridges               │
 │     SOCKS5 proxy on 127.0.0.1:9050                       │
 └────────────────────┬────────────────────────────────────┘
                      │
@@ -102,16 +102,16 @@ When `ALL_PROXY=socks5://127.0.0.1:9050` is set in the environment before the ga
 
 ```bash
 # One-time: download Tor binary
-python -m hermes_tor.mcp_server  # then use tor_download tool
+python -m darkloom.mcp_server  # then use tor_download tool
 
 # Add bridges (from @GetBridgesBot on Telegram)
 # Save to ~/.hermes/tor/bridges.txt
 
 # Start gateway with Tor routing
-python -m hermes_tor.gateway -- hermes gateway run
+python -m darkloom.gateway -- hermes gateway run
 
 # Or with longer bootstrap timeout
-python -m hermes_tor.gateway --timeout 90 -- hermes gateway run
+python -m darkloom.gateway --timeout 90 -- hermes gateway run
 ```
 
 ### Persistent Config (survives gateway restarts)
@@ -119,7 +119,7 @@ python -m hermes_tor.gateway --timeout 90 -- hermes gateway run
 ```bash
 # Start Tor once, write config to ~/.hermes/.env
 python -c "
-from hermes_tor.gateway import start_tor_for_gateway
+from darkloom.gateway import start_tor_for_gateway
 mgr = start_tor_for_gateway()
 print('Tor running — gateway will auto-route through Tor on next start')
 "
@@ -135,7 +135,7 @@ hermes gateway run
 python -c "
 import os
 os.environ['TOR_ENABLED'] = '1'
-from hermes_tor.proxy_http import check_tor_connection
+from darkloom.proxy_http import check_tor_connection
 print(check_tor_connection())
 "
 ```
@@ -149,10 +149,10 @@ The patches in `patches/` directory are for Hermes-agent core. They add proxy su
 cd ~/.hermes/hermes-agent
 
 # Apply Photon proxy patch
-git apply ~/1_Projects/hermes-tor/patches/0001-photon-proxy.patch
+git apply ~/1_Projects/darkloom/patches/0001-photon-proxy.patch
 
 # Apply WhatsApp proxy patch
-git apply ~/1_Projects/hermes-tor/patches/0002-whatsapp-proxy.patch
+git apply ~/1_Projects/darkloom/patches/0002-whatsapp-proxy.patch
 
 # Restart gateway
 hermes gateway restart

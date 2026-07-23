@@ -1,4 +1,4 @@
-"""Platform-specific constants for hermes-tor.
+"""Platform-specific constants for darkloom.
 
 All URLs and paths verified against live Tor Expert Bundle 15.0.19
 (downloaded and inspected 2026-07-22).
@@ -19,7 +19,7 @@ TOR_PLATFORM_MAP = {
 }
 
 # Tor Browser release signing key.  The key itself is shipped in
-# ``hermes_tor/keys/tor-browser-developers.asc``; accepting a key obtained at
+# ``darkloom/keys/tor-browser-developers.asc``; accepting a key obtained at
 # download time would merely move trust to the network.
 TOR_RELEASE_SIGNING_FINGERPRINTS = frozenset({
     "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290",

@@ -1,4 +1,4 @@
-# hermes-tor Technical Reference
+# darkloom Technical Reference
 
 ## The Year Is Now
 
@@ -211,7 +211,7 @@ This is documented in the [aiohttp_socks README](https://github.com/romis2012/ai
 
 ### 3.1 `constants.py` — Platform Detection & Path Resolution
 
-**Source:** [`src/hermes_tor/constants.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/constants.py)
+**Source:** [`src/darkloom/constants.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/constants.py)
 
 This module encapsulates all platform-specific knowledge. Design decisions and their justifications:
 
@@ -224,7 +224,7 @@ This module encapsulates all platform-specific knowledge. Design decisions and t
 
 ### 3.2 `downloader.py` — Tor Expert Bundle Acquisition
 
-**Source:** [`src/hermes_tor/downloader.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/downloader.py)
+**Source:** [`src/darkloom/downloader.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/downloader.py)
 
 **Architectural decision: subprocess download instead of system package manager.**
 
@@ -240,7 +240,7 @@ Download uses `httpx.stream()` with 64KB chunks — streaming to a temp file, th
 
 ### 3.3 `bridges.py` — Bridge Parser & Validator
 
-**Source:** [`src/hermes_tor/bridges.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/bridges.py)
+**Source:** [`src/darkloom/bridges.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/bridges.py)
 
 **Architectural decision: custom regex parser instead of Stem's `Bridge` class.**
 
@@ -257,7 +257,7 @@ The parser handles three bridge types documented in the [Tor Pluggable Transport
 
 ### 3.4 `daemon.py` — Tor Subprocess Manager
 
-**Source:** [`src/hermes_tor/daemon.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/daemon.py)
+**Source:** [`src/darkloom/daemon.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/daemon.py)
 
 **Architectural decision: `subprocess.Popen` instead of Stem's `launch_tor_with_config()`.**
 
@@ -291,7 +291,7 @@ The torrc is regenerated on every `start()` call. This ensures configuration cha
 
 ### 3.5 `proxy_http.py` — SOCKS5-Aware HTTP Helpers
 
-**Source:** [`src/hermes_tor/proxy_http.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/proxy_http.py)
+**Source:** [`src/darkloom/proxy_http.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/proxy_http.py)
 
 **Architectural decision: explicit proxy transport instead of relying on env vars.**
 
@@ -311,13 +311,13 @@ Hits `https://check.torproject.org/` through the SOCKS5 proxy. The response pars
 
 ### 3.6 `verifier.py` — TLS-Validating Route Verification
 
-**Source:** [`src/hermes_tor/verifier.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/verifier.py)
+**Source:** [`src/darkloom/verifier.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/verifier.py)
 
 Uses Tor's structured HTTPS JSON API (`check.torproject.org/api/ip`) plus an independent observer (`api.ipify.org`) to cross-validate exit IPs. TLS certificate/hostname validation enabled (no redirects followed). The `verify()` method requires Tor's `IsTor: true` assertion AND matching exit IPs from both endpoints. `verify_async()` delegates to `verify()` via `asyncio.to_thread`. All response parsing is JSON-based — no HTML regex parsing.
 
 ### 3.7 `manager.py` — Unified TorManager API
 
-**Source:** [`src/hermes_tor/manager.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/manager.py)
+**Source:** [`src/darkloom/manager.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/manager.py)
 
 **State machine design:**
 
@@ -331,18 +331,18 @@ STOPPED → STARTING → RUNNING → STOPPING → STOPPED
 
 ### 3.8 `mcp_server.py` — Hermes MCP Integration
 
-**Source:** [`src/hermes_tor/mcp_server.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/mcp_server.py)
+**Source:** [`src/darkloom/mcp_server.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/mcp_server.py)
 
 Implements the [Model Context Protocol](https://modelcontextprotocol.io/) (Anthropic, 2024) via the [Python MCP SDK](https://github.com/modelcontextprotocol/python-sdk). Hermes connects via stdio transport as documented in the Hermes-agent [MCP configuration reference](https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/config.py) (`mcp_servers` key).
 
-6 tools registered. Tool names are prefixed as `mcp_hermes-tor_<tool>` by Hermes' MCP discovery. The module-level `_manager` singleton ensures one TorManager per process.
+6 tools registered. Tool names are prefixed as `mcp_darkloom_<tool>` by Hermes' MCP discovery. The module-level `_manager` singleton ensures one TorManager per process.
 
 **Agentic maintenance loop design:**
-An agent can call `mcp_hermes-tor_verify` periodically. If `using_tor` is False → call `mcp_hermes-tor_status` to diagnose → if Tor is down → call `mcp_hermes-tor_start` → if bridges blocked → call `mcp_hermes-tor_add_bridge` with fresh bridges. This implements the [autonomic computing](https://www.ibm.com/docs/en/autonomic-computing/1.0?topic=overview-autonomic-computing-manifesto) (IBM, 2001) monitor-analyze-plan-execute (MAPE) loop.
+An agent can call `mcp_darkloom_verify` periodically. If `using_tor` is False → call `mcp_darkloom_status` to diagnose → if Tor is down → call `mcp_darkloom_start` → if bridges blocked → call `mcp_darkloom_add_bridge` with fresh bridges. This implements the [autonomic computing](https://www.ibm.com/docs/en/autonomic-computing/1.0?topic=overview-autonomic-computing-manifesto) (IBM, 2001) monitor-analyze-plan-execute (MAPE) loop.
 
 ### 3.9 `gateway.py` — Gateway Integration
 
-**Source:** [`src/hermes_tor/gateway.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py)
+**Source:** [`src/darkloom/gateway.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/gateway.py)
 
 **Architectural decision: `ALL_PROXY` as the integration point.**
 
@@ -352,23 +352,23 @@ Hermes' gateway already checks `ALL_PROXY` in its centralized `resolve_proxy_url
 
 ### 3.10 `hardening.py` — Adversarial Audit
 
-**Source:** [`src/hermes_tor/hardening.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/hardening.py)
+**Source:** [`src/darkloom/hardening.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/hardening.py)
 
 **Architectural decision: executable audit as the single source of truth.**
 
-Traditional security documentation lists mitigations. This module makes the audit executable: `python -m hermes_tor.hardening audit` prints the full 17-leak table with severity, status, before/after states, verification methods, and affected components. The pattern is inspired by [STIG](https://public.cyber.mil/stigs/) (Security Technical Implementation Guide) compliance checklists, where each finding includes a check procedure.
+Traditional security documentation lists mitigations. This module makes the audit executable: `python -m darkloom.hardening audit` prints the full 17-leak table with severity, status, before/after states, verification methods, and affected components. The pattern is inspired by [STIG](https://public.cyber.mil/stigs/) (Security Technical Implementation Guide) compliance checklists, where each finding includes a check procedure.
 
 **TOR_STRICT_MODE:** Implements the [fail-closed principle](https://en.wikipedia.org/wiki/Fail-closed): features that cannot be secured are disabled rather than operating in a degraded security state. This is the same design principle used in [Tor Browser's security slider](https://tb-manual.torproject.org/security-settings/).
 
 ### 3.11 `privacy.py` — Centralized Redaction & Error Classification
 
-**Source:** [`src/hermes_tor/privacy.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/privacy.py)
+**Source:** [`src/darkloom/privacy.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/privacy.py)
 
 **`redact(text)`**: Sanitizes URLs (strips credentials, query strings, fragments), file paths (replaces home directory with `[REDACTED HOME]`), and known token patterns from log output.
 
 **`RedactingFilter`**: A `logging.Filter` that applies `redact()` to every log record before handlers see it. Attached to the root logger, ensuring no sensitive data escapes through any log channel.
 
-**`get_logger(name)`**: Drop-in replacement for `logging.getLogger(name)` that returns a logger with the `RedactingFilter` pre-attached. All 7 hermes-tor modules route through this.
+**`get_logger(name)`**: Drop-in replacement for `logging.getLogger(name)` that returns a logger with the `RedactingFilter` pre-attached. All 7 darkloom modules route through this.
 
 **`classify_error(exc)`** → `PublicError`: Maps exceptions to stable, minimal public error codes and messages. Internal details (stack traces, local paths, network addresses) never leave the process via MCP or API responses.
 
@@ -378,7 +378,7 @@ Traditional security documentation lists mitigations. This module makes the audi
 
 ### 3.12 `secure_files.py` — Race-Resistant Private File Operations
 
-**Source:** [`src/hermes_tor/secure_files.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py)
+**Source:** [`src/darkloom/secure_files.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/secure_files.py)
 
 **`private_directory(path)`**: Creates an owner-only directory tree (0700). Validates every existing component — rejects symlinks, unexpected file types, and files owned by another user. On Windows, applies owner-only ACLs via PowerShell SDDL replacement (best-effort).
 
@@ -392,7 +392,9 @@ Traditional security documentation lists mitigations. This module makes the audi
 
 Used by: `bridges.py` (load/save bridges), `daemon.py` (write torrc), `gateway.py` (update `~/.hermes/.env`).
 
----
+subprocess I/O, strict mode blocks the launch boundary.
+
+![Darkloom Network Policy — Central Authorization Gate](imgs/03-flowchart-network-policy.png)
 
 ### 3.13 `policy.py` — Central Fail-Closed Network Policy
 
@@ -517,7 +519,7 @@ resolve_proxy_url(platform_env_var, target_hosts):
 
 ## 5. Adversarial Hardening Audit — Complete Root Cause Analysis
 
-*(17 leaks with root cause analysis, before/after states, source locations, and verification methods. Full details in the audit table. Run `python -m hermes_tor.hardening audit` for the complete report.)*
+*(17 leaks with root cause analysis, before/after states, source locations, and verification methods. Full details in the audit table. Run `python -m darkloom.hardening audit` for the complete report.)*
 
 **Key hardening decisions with citations:**
 
@@ -534,9 +536,11 @@ resolve_proxy_url(platform_env_var, target_hosts):
 
 ## 6. Self-Healing Topology
 
+![Self-Healing Watchdog — Layered Health Verification](imgs/05-infographic-watchdog.png)
+
 ### 6.1 TorWatchdog Design
 
-**Source:** [`src/hermes_tor/gateway.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py) lines 199-360
+**Source:** [`src/darkloom/gateway.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/gateway.py) lines 199-360
 
 The watchdog implements three recovery mechanisms:
 
@@ -609,7 +613,7 @@ Measured on a residential connection (100 Mbps down, 20 Mbps up) from Central US
 
 ## 8. API Reference
 
-*(Complete API reference for TorManager, Gateway, execute_code helpers, Hardening, and MCP tools. See [SKILL.md](https://github.com/andrexibiza/hermes-tor/blob/main/SKILL.md) for user-facing documentation.)*
+*(Complete API reference for TorManager, Gateway, execute_code helpers, Hardening, and MCP tools. See [SKILL.md](https://github.com/andrexibiza/darkloom/blob/main/SKILL.md) for user-facing documentation.)*
 
 ---
 

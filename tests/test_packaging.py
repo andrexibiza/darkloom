@@ -23,7 +23,7 @@ def test_declared_dependencies_provide_socks_transport(tmp_path):
         [
             str(python),
             "-c",
-            "from hermes_tor.socks_support import require_socks_support; "
+            "from darkloom.socks_support import require_socks_support; "
             "require_socks_support('socks5://127.0.0.1:1')",
         ],
         check=True,

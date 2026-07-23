@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from hermes_tor.policy import (
+from darkloom.policy import (
     NetworkChannel,
     NetworkPolicyError,
     authorize,
@@ -93,7 +93,7 @@ def test_proxy_aware_entry_points_are_explicitly_allowed(monkeypatch):
 
 
 def test_proxy_http_refuses_direct_client_before_httpx_construction(monkeypatch):
-    from hermes_tor import proxy_http
+    from darkloom import proxy_http
 
     monkeypatch.setattr(proxy_http.httpx, "Client", lambda *a, **k: pytest.fail("client created"))
     with pytest.raises(TypeError, match="does not accept use_tor"):

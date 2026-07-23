@@ -274,11 +274,11 @@ remove_gateway_env_file()
 
 OpenAI, Anthropic, and their API gateways (Cloudflare, AWS WAF) aggressively block traffic from known Tor exit nodes. You will see HTTP 403, 429, or invisible CAPTCHA challenges. This is not a bug — it's the providers protecting their APIs.
 
-**Solution:** `TOR_SKIP_LLM=1` routes LLM API calls direct (or through VPN) while keeping all other traffic through Tor. The API key already identifies your account — Tor adds IP privacy but not account anonymity for API calls. For truly anonymous LLM access, use local models or providers that don't block Tor.
+**Solution:** `TOR_SKIP_LLM=1` signals a compatible LLM integration to route only its own API client direct (or through VPN), while the process-wide Tor proxy remains enabled for all other traffic. The integration must explicitly support this flag. The API key already identifies your account — Tor adds IP privacy but not account anonymity for API calls. For truly anonymous LLM access, use local models or providers that don't block Tor.
 
 ```python
 from hermes_tor.gateway import skip_llm_proxy
-skip_llm_proxy()  # Removes ALL_PROXY/HTTPS_PROXY/HTTP_PROXY for LLM calls
+skip_llm_proxy()  # Sets TOR_SKIP_LLM without removing gateway proxy variables
 ```
 
 ### Tor Latency

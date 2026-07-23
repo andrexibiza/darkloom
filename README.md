@@ -243,7 +243,7 @@ data = tor_get("https://httpbin.org/ip")
 
 # LLM exit node hostility mitigation
 from hermes_tor.gateway import skip_llm_proxy
-skip_llm_proxy()  # Removes ALL_PROXY for LLM calls, everything else stays through Tor
+skip_llm_proxy()  # Signals compatible LLM clients; gateway proxy vars stay intact
 ```
 
 ---
@@ -278,7 +278,7 @@ Step 3: Hermes gateway inherits ALL_PROXY
 OpenAI, Anthropic, and their CDNs (Cloudflare, AWS WAF) block Tor exit nodes ([Cloudflare Bot Management](https://www.cloudflare.com/products/bot-management/)). Expected: HTTP 403, 429, or CAPTCHA.
 
 **Mitigations:**
-- `TOR_SKIP_LLM=1` — LLM calls bypass Tor while platform traffic stays protected
+- `TOR_SKIP_LLM=1` — asks compatible integrations to bypass Tor only for their LLM client
 - VPN → Tor → LLM — provider sees VPN IP, not Tor exit IP
 - Tor-friendly providers — OpenRouter, local models, some open-source endpoints
 

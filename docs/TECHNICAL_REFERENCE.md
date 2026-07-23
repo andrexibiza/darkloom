@@ -335,7 +335,7 @@ An agent can call `mcp_hermes-tor_verify` periodically. If `using_tor` is False 
 
 Hermes' gateway already checks `ALL_PROXY` in its centralized `resolve_proxy_url()` at `gateway/platforms/base.py` line 378. By setting `ALL_PROXY=socks5://127.0.0.1:9050` before gateway startup, every platform adapter routes through Tor — no adapter-level changes needed. This is the [facade pattern](https://en.wikipedia.org/wiki/Facade_pattern): one environment variable, 20+ adapters, zero adapter awareness of Tor.
 
-**`skip_llm_proxy()`:** Removes `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` from `os.environ` for LLM API calls. Based on the observed behavior that major LLM providers (OpenAI, Anthropic) block Tor exit nodes with HTTP 403 ([Cloudflare Bot Management](https://www.cloudflare.com/products/bot-management/)). Platform adapters still route through Tor via platform-specific vars set independently.
+**`skip_llm_proxy()`:** Sets `TOR_SKIP_LLM=1` for compatible LLM integrations without removing `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` from `os.environ`. An integration honoring the flag must disable proxy inheritance only on its LLM HTTP client. Keeping the generic variables intact is required because platform adapters and other gateway traffic use them for Tor routing.
 
 ### 3.10 `hardening.py` — Adversarial Audit
 

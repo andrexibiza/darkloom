@@ -2,8 +2,29 @@
 
 Run: uv run pytest tests/ -v
 """
-import pytest
+import os
 from pathlib import Path
+
+import pytest
+
+
+def test_skip_llm_proxy_preserves_gateway_routing(monkeypatch):
+    """An LLM-only bypass must not disable the process-wide Tor proxy."""
+    from hermes_tor.gateway import inject_gateway_env, is_llm_skipped, skip_llm_proxy
+
+    for key in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "TOR_PROXY", "TOR_ENABLED"):
+        monkeypatch.delenv(key, raising=False)
+
+    inject_gateway_env(socks_port=19050)
+    proxies = {
+        key: os.environ[key]
+        for key in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "TOR_PROXY")
+    }
+
+    skip_llm_proxy()
+
+    assert is_llm_skipped()
+    assert all(os.environ[key] == value for key, value in proxies.items())
 
 
 # ── constants tests ────────────────────────────────────────────

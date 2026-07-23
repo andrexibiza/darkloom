@@ -174,13 +174,14 @@ GATEWAY_ENV_VARS = _policy_environment(
 # Add TOR_HEALTH so clients can observe gateway-level Tor health state.
 GATEWAY_ENV_VARS["TOR_HEALTH"] = "1"
 
-# When TOR_SKIP_LLM=1, LLM API calls bypass Tor to avoid exit node blocking.
+# TOR_SKIP_LLM is a signal for LLM integrations to bypass Tor on their own
+# client.  Generic proxy variables must remain in place: they are also the
+# gateway-wide routing mechanism for platform adapters and tools.
 # OpenAI, Anthropic, and their CDNs (Cloudflare) block known Tor exit IPs
 # with 403/429/CAPTCHA. The API key already identifies your account — Tor
 # for LLM calls provides IP privacy but not account anonymity. Bypassing
 # Tor for LLM calls preserves streaming performance (TTFT) while keeping
 # all other traffic (messaging platforms, web tools, subagents) through Tor.
-LLM_SKIP_VARS = {"ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"}
 
 
 def inject_gateway_env(
@@ -288,13 +289,13 @@ def require_verified_proxy_clients(policy: ProxyPolicy, *client_names: str) -> N
 
 
 def skip_llm_proxy():
-    """Remove proxy vars so LLM API calls bypass Tor.
+    """Request a Tor bypass from integrations that create LLM clients.
 
     Call this when LLM providers block Tor exit nodes (403/429 errors).
-    Removes ALL_PROXY/HTTPS_PROXY/HTTP_PROXY from os.environ so the OpenAI
-    SDK connects direct (or through VPN). All other traffic (platform
-    adapters, web tools, subagents) still routes through Tor because
-    platform-specific proxy vars are set independently.
+    This deliberately leaves the process-wide proxy variables untouched:
+    platform adapters, web tools, and subprocesses rely on those variables
+    for Tor routing.  The LLM integration must interpret TOR_SKIP_LLM and
+    disable environment-proxy inheritance only for its own HTTP client.
 
     Only meaningful when TOR_ENABLED=1. Has no effect otherwise.
     """
@@ -302,12 +303,10 @@ def skip_llm_proxy():
         return
     if _strict_mode(os.environ):
         raise ProxyPolicyError("LLM proxy bypass is unsupported in strict mode")
-    for key in (*LLM_SKIP_VARS, *(key.lower() for key in LLM_SKIP_VARS)):
-        os.environ.pop(key, None)
     os.environ["TOR_SKIP_LLM"] = "1"
     logger.warning(
-        "TOR_SKIP_LLM=1 — LLM API calls will bypass Tor to avoid exit node blocking. "
-        "Platform adapters still route through Tor via platform-specific proxy vars."
+        "TOR_SKIP_LLM=1 — requesting a Tor bypass for LLM clients; "
+        "gateway-wide proxy variables remain enabled."
     )
 
 

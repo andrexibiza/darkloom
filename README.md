@@ -100,11 +100,15 @@ flowchart TD
     C --> K[Web Tools ✅]
     C --> L[Browser ✅]
     C --> M[Subagents ✅]
-    C --> N[Email ❌]
-    C --> O[IRC ❌]
+    C --> N[Email 🔒 blocked at policy layer]
+    C --> O[IRC 🔒 blocked at policy layer]
+    C --> P[Signal · SMS · Mattermost · Teams]
+    C --> Q[LINE · SimpleX · ntfy · Google Chat]
+    C --> R[Home Assistant · DingTalk · Feishu · WeCom · WeChat]
+    C --> S[Raft · API Server · Webhooks]
 ```
 
-Hermes already shipped with a complete SOCKS5 proxy system — [`resolve_proxy_url()`](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L357) in `gateway/platforms/base.py` checks `ALL_PROXY`, `HTTPS_PROXY`, and platform-specific vars across all 20+ messaging adapters. The missing piece was the Tor daemon running and the env var set. This package downloads the [Tor Expert Bundle](https://www.torproject.org/download/tor/), configures obfs4 bridges through [lyrebird](https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird), boots the daemon, injects `ALL_PROXY=socks5://127.0.0.1:9050`, and starts a [self-healing watchdog](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L199) that monitors health every 15 seconds and rotates circuits every 10 minutes via the [Tor ControlPort](https://github.com/torproject/torspec/blob/main/control-spec.txt) NEWNYM signal.
+Hermes already shipped with a complete SOCKS5 proxy system — [`resolve_proxy_url()`](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L357) in `gateway/platforms/base.py` checks `ALL_PROXY`, `HTTPS_PROXY`, and platform-specific vars across all [23 messaging adapters](https://github.com/NousResearch/hermes-agent/tree/main/plugins/platforms). The missing piece was the Tor daemon running and the env var set. This package downloads the [Tor Expert Bundle](https://www.torproject.org/download/tor/), configures obfs4 bridges through [lyrebird](https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird), boots the daemon, injects `ALL_PROXY=socks5://127.0.0.1:9050`, and starts a [self-healing watchdog](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L199) that monitors health every 15 seconds and rotates circuits every 10 minutes via the [Tor ControlPort](https://github.com/torproject/torspec/blob/main/control-spec.txt) NEWNYM signal. Adapters that cannot use SOCKS5 directly (raw socket protocols) are denied at the [policy layer](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) before socket creation — fail-closed, not unsupported.
 
 ---
 

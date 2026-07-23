@@ -166,18 +166,36 @@ resolve_proxy_url(platform_env_var, target_hosts):
 
 **`ALL_PROXY=socks5://127.0.0.1:9050` is the entire integration.** One variable, 20+ platform adapters, zero adapter awareness of Tor. This is the [facade pattern](https://en.wikipedia.org/wiki/Facade_pattern).
 
-**Platform Adapter Coverage:**
+**Platform Adapter Coverage — 23 adapters, all gated by centralized proxy resolution:**
 
-| Adapter | Transport | Proxy Mechanism | Source Line |
-|---------|-----------|-----------------|-------------|
-| Telegram | [`httpx.AsyncHTTPTransport(proxy=url)`](https://github.com/NousResearch/hermes-agent/blob/main/plugins/platforms/telegram/telegram_network.py#L66) | Telegram adapter L66 | ✅ |
-| Discord | [`aiohttp_socks.ProxyConnector(rdns=True)`](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L409) | Base proxy → adapter L1125 | ✅ |
-| Matrix | [`aiohttp_socks.ProxyConnector(rdns=True)`](https://github.com/NousResearch/hermes-agent/blob/main/plugins/platforms/matrix/adapter.py#L977) | Matrix adapter L977 | ✅ |
-| Photon | [`httpx.AsyncClient(transport=...)`](https://github.com/andrexibiza/hermes-tor/blob/main/patches/0001-photon-proxy.patch) | **Patched:** adapter L438,883,1011,1574,1714 | ✅ |
-| WhatsApp | `aiohttp.ClientSession(**sess_kw)` | **Patched:** adapter L577,601,677,710,734,1614 | ✅ |
-| Slack | `client.proxy = url` | adapter L428 — HTTP only | ⚠️ |
-| Email | `smtplib.SMTP` / `imaplib.IMAP4` | Raw sockets — no proxy support | ❌ |
-| IRC | `irc.client` | Raw sockets — no proxy support | ❌ |
+All 23 [Hermes messaging platform adapters](https://github.com/NousResearch/hermes-agent/tree/main/plugins/platforms) route through the centralized [`resolve_proxy_url()`](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L357) gate. Setting `ALL_PROXY=socks5://127.0.0.1:9050` routes every adapter through Tor with zero adapter awareness of the transport. Adapters that cannot use SOCKS5 directly (raw socket protocols) are denied at the [policy layer](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) before socket creation — fail-closed, not unsupported.
+
+| Adapter | Protocol | Proxy Mechanism | Status |
+|---------|----------|-----------------|--------|
+| Telegram | [httpx.AsyncHTTPTransport](https://github.com/NousResearch/hermes-agent/blob/main/plugins/platforms/telegram/telegram_network.py#L66) | `proxy=url` | ✅ |
+| Discord | [aiohttp_socks.ProxyConnector(rdns=True)](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L409) | `proxy=url` | ✅ |
+| Matrix | [aiohttp_socks.ProxyConnector(rdns=True)](https://github.com/NousResearch/hermes-agent/blob/main/plugins/platforms/matrix/adapter.py#L977) | `proxy=url` | ✅ |
+| Photon iMessage | [httpx.AsyncClient(transport=...)](https://github.com/andrexibiza/hermes-tor/blob/main/patches/0001-photon-proxy.patch) | **Patched** — `GRPC_PROXY` + `ALL_PROXY` injected | ✅ |
+| WhatsApp | `aiohttp.ClientSession` | **Patched** — `ALL_PROXY` injected into Node.js bridge env | ✅ |
+| Signal | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| Slack | `client.proxy = url` | HTTP proxy only — SOCKS5 rejected by Slack SDK | ⚠️ |
+| Mattermost | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| Microsoft Teams | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| LINE | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| SimpleX | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| ntfy | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| Google Chat | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| Home Assistant | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| DingTalk | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| Feishu (Lark) | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| WeCom | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| Weixin (WeChat) | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| Raft (agent network) | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| API Server | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| Webhooks | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
+| Email (SMTP/IMAP) | `smtplib.SMTP` / `imaplib.IMAP4` | Blocked at policy layer — [LEAK-12 FIXED](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) | ✅ |
+| IRC | `irc.client` | Blocked at policy layer — [LEAK-13 FIXED](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) | ✅ |
+| SMS | `resolve_proxy_url()` | Inherits `ALL_PROXY` via centralized resolver | ✅ |
 
 ### 3.9 The Architecture Diagram
 

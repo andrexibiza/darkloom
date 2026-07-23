@@ -1,8 +1,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Tor-15.0.19-7D4698?logo=torproject" alt="Tor 15.0.19">
-  <img src="https://img.shields.io/badge/leaks_fixed-9/17-brightgreen" alt="9/17 leaks fixed">
+  <img src="https://img.shields.io/badge/hardening-7%20PRs%20merged-brightgreen" alt="7 hardening PRs merged">
   <img src="https://img.shields.io/badge/platforms-20+-blue" alt="20+ platforms">
-  <img src="https://img.shields.io/badge/tests-24/24-green" alt="24/24 tests">
+  <img src="https://img.shields.io/badge/tests-102/102-green" alt="102/102 tests">
   <img src="https://img.shields.io/badge/license-MIT-yellow" alt="MIT">
   <img src="https://img.shields.io/badge/references-46%20sources-blueviolet" alt="46 cited sources">
 </p>
@@ -183,15 +183,17 @@ The Tor Project consolidated all pluggable transports into [lyrebird](https://gi
 
 ## Self-Healing Topology
 
-The `TorWatchdog` (source: [`src/hermes_tor/gateway.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py) lines 199-360) is a background daemon thread implementing three recovery mechanisms:
+The `TorWatchdog` (source: [`src/hermes_tor/gateway.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py) lines 199-360) is a background daemon thread implementing three recovery mechanisms with layered health verification:
 
 | Mechanism | Interval | Action |
 |-----------|----------|--------|
-| Health monitoring | 15s | TCP connect to 127.0.0.1:9050; if dead, trigger restart |
-| Exponential backoff restart | 10s → 20s → 40s → 80s → 160s (max 5) | Stop stale daemon, restart, re-inject env vars |
-| Circuit rotation | 10min | NEWNYM signal via ControlPort (control-spec.txt §3.7); fallback: daemon restart |
+| Health monitoring | 15s | Four-layer check: process health → SOCKS5 handshake → authenticated bootstrap → exit route verified |
+| Exponential backoff restart | 10s → 20s → 40s → 80s → 160s (max 5) | Block gateway env, stop stale daemon, restart, verify all layers |
+| Circuit rotation | 10min | Cookie-authenticated NEWNYM via ControlPort; fallback: daemon restart |
 
-**On any interruption, the watchdog detects, restarts, re-injects, and the gateway reconnects. The agent doesn't even notice.**
+**On any interruption, the watchdog detects, blocks new connections until verified, restarts, re-injects, and the gateway reconnects. No direct fallback window.**
+
+**Incremental principle:** If one channel has a tiny leak, don't cascade it into a full system break. Every hardening step is additive progress over the current build.
 
 ---
 
@@ -241,9 +243,10 @@ import os; os.environ['TOR_ENABLED'] = '1'
 from hermes_tor.proxy_http import tor_get, tor_post
 data = tor_get("https://httpbin.org/ip")
 
-# LLM clients use explicit, request-scoped transports
-from hermes_tor.gateway import create_llm_client, LLMProviderPolicy, LLMRoute
-client = create_llm_client('example', LLMRoute.TOR, {'example': LLMProviderPolicy()})
+# LLM clients use verified explicit SOCKS5 transports
+from hermes_tor.gateway import create_httpx_client, ProxyPolicy
+policy = ProxyPolicy("socks5://127.0.0.1:9050", strict=True)
+client = create_httpx_client(policy=policy, asynchronous=False)
 ```
 
 ---
@@ -262,12 +265,14 @@ Step 3: Hermes gateway inherits ALL_PROXY
 
 ## Tested
 
-- Windows 10 — Tor 15.0.19 bootstrapped in 4.5s, `check.torproject.org` confirmed (exit IP `185.220.101.6`)
-- 24/24 unit tests passing
+- Windows 10 — Tor 15.0.19 bootstrapped in 4.5s, `check.torproject.org` confirmed
+- **102/102 unit tests passing** — up from 24 after 7 hardening PRs
 - 2 obfs4 bridges verified working
-- Self-healing watchdog: health check, auto-restart, circuit rotation — all tested
+- Self-healing watchdog: layered health check (process + SOCKS5 + bootstrap + route), auto-restart, circuit rotation
 - Cross-platform daemon code (Windows + Linux)
-- Zero secrets in repo (verified by grep scan across all commits)
+- Zero secrets in repo (verified by grep scan + centralized redaction module)
+- Gateway uses dedicated `~/.hermes/tor/gateway.env` — never rewrites credential-bearing `~/.hermes/.env`
+- Bridge rotation hardened: all-or-nothing validation, atomic private writes, no bridge lines in logs
 
 ---
 

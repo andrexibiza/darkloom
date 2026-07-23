@@ -1,13 +1,13 @@
 """End-to-end Tor route verification over TLS-validating SOCKS."""
 import asyncio
 import ipaddress
-import logging
 from dataclasses import dataclass, field
 
 import httpx
 from hermes_tor.policy import NetworkChannel, authorize
+from hermes_tor.privacy import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 DEFAULT_CHECK_ENDPOINTS = (
     "https://check.torproject.org/api/ip",
     "https://api.ipify.org?format=json",

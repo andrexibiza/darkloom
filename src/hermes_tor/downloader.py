@@ -33,6 +33,10 @@ from hermes_tor.constants import (
 # from tar headers, before writing anything, also prevents sparse/zip bombs.
 MAX_EXPANDED_SIZE = 512 * 1024 * 1024
 
+from hermes_tor.privacy import get_logger
+
+logger = get_logger(__name__)
+
 
 class DownloadError(Exception):
     """Raised when a Tor binary cannot be securely installed."""

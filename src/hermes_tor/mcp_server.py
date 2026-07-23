@@ -12,18 +12,32 @@ Provides 6 tools:
     tor_add_bridge  — Add a bridge line
 """
 import json
-import logging
 import sys
 from pathlib import Path
 
 from hermes_tor.manager import TorManager, TorState
 from hermes_tor.constants import BRIDGES_PATH
 from hermes_tor.policy import NetworkChannel, authorize
+from hermes_tor.privacy import classify_error, private_diagnostic, require_local_admin
+from hermes_tor.privacy import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Module-level singleton — one TorManager per process
 _manager: TorManager | None = None
+
+
+def _error(error: object, component: str, code: str | None = None) -> str:
+    """Serialize only the stable public classification to an MCP caller."""
+    private_diagnostic(component, error)
+    public = classify_error(error)
+    return json.dumps({
+        "ok": False,
+        "error": {
+            "code": code or public.code,
+            "message": str(error) if code else public.message,
+        },
+    })
 
 
 def get_manager(auto_download: bool = True) -> TorManager:
@@ -44,16 +58,15 @@ def tor_download() -> str:
     immediately if already installed.
     """
     authorize(NetworkChannel.TOR_BOOTSTRAP)
-    mgr = get_manager()
     try:
-        path = mgr.ensure_installed()
+        mgr = get_manager()
+        mgr.ensure_installed()
         return json.dumps({
+            "ok": True,
             "installed": True,
-            "path": str(path),
-            "platform": __import__("hermes_tor.constants").CURRENT_PLATFORM,
         })
     except Exception as e:
-        return json.dumps({"installed": False, "error": str(e)})
+        return _error(e, "tor_download")
 
 
 def tor_start(socks_port: int = 9050, timeout: float = 60.0) -> str:
@@ -66,12 +79,17 @@ def tor_start(socks_port: int = 9050, timeout: float = 60.0) -> str:
     tor_add_bridge to configure them before starting.
     """
     authorize(NetworkChannel.TOR_BOOTSTRAP)
-    mgr = get_manager()
-    mgr.socks_port = socks_port
-    mgr.load_bridges()
-
-    status = mgr.start(timeout=timeout)
+    try:
+        mgr = get_manager()
+        mgr.socks_port = socks_port
+        mgr.load_bridges()
+        status = mgr.start(timeout=timeout)
+    except Exception as exc:
+        return _error(exc, "tor_start")
+    if status.error:
+        return _error(status.error, "tor_start", status.error_code)
     return json.dumps({
+        "ok": True,
         "state": status.state.name,
         "socks_proxy_url": status.socks_proxy_url,
         "process_healthy": status.process_healthy,
@@ -87,28 +105,34 @@ def tor_start(socks_port: int = 9050, timeout: float = 60.0) -> str:
 
 def tor_stop() -> str:
     """Stop the Tor daemon."""
-    mgr = get_manager()
-    status = mgr.stop()
-    return json.dumps({"state": status.state.name})
+    try:
+        mgr = get_manager()
+        status = mgr.stop()
+        return json.dumps({"ok": True, "state": status.state.name})
+    except Exception as exc:
+        return _error(exc, "tor_stop")
 
 
 def tor_status() -> str:
     """Get current Tor daemon status including bridge count and uptime."""
-    mgr = get_manager()
-    status = mgr.status()
-    return json.dumps({
-        "state": status.state.name,
-        "socks_proxy_url": status.socks_proxy_url,
-        "process_healthy": status.process_healthy,
-        "socks_healthy": status.socks_healthy,
-        "bootstrap_percent": status.bootstrap_percent,
-        "bootstrap_complete": status.bootstrap_complete,
-        "external_route_verified": status.external_route_verified,
-        "bridge_count": status.bridge_count,
-        "exit_ip": status.exit_ip,
-        "uptime_seconds": status.uptime_seconds,
-        "error": status.error,
-    })
+    try:
+        mgr = get_manager()
+        status = mgr.status()
+        return json.dumps({
+            "ok": True,
+            "state": status.state.name,
+            "socks_proxy_url": status.socks_proxy_url,
+            "process_healthy": status.process_healthy,
+            "socks_healthy": status.socks_healthy,
+            "bootstrap_percent": status.bootstrap_percent,
+            "bootstrap_complete": status.bootstrap_complete,
+            "external_route_verified": status.external_route_verified,
+            "bridge_count": status.bridge_count,
+            "uptime_seconds": status.uptime_seconds,
+            "error": status.error,
+        })
+    except Exception as exc:
+        return _error(exc, "tor_status")
 
 
 def tor_verify() -> str:
@@ -117,14 +141,18 @@ def tor_verify() -> str:
     Requires Tor's structured HTTPS API and an independent HTTPS service to
     report the same exit address through the SOCKS5 proxy.
     """
-    mgr = get_manager()
-    authorize(NetworkChannel.MCP, proxy_url=mgr.socks_proxy_url)
-    result = mgr.verify()
+    try:
+        mgr = get_manager()
+        authorize(NetworkChannel.MCP, proxy_url=mgr.socks_proxy_url)
+        result = mgr.verify()
+    except Exception as exc:
+        return _error(exc, "tor_verify")
+    if result.error:
+        return _error(result.error, "tor_verify")
     return json.dumps({
+        "ok": True,
         "using_tor": result.using_tor,
-        "exit_ip": result.exit_ip,
         "is_anonymous": result.is_anonymous,
-        "error": result.error,
     })
 
 
@@ -142,13 +170,16 @@ def tor_add_bridge(bridge_line: str) -> str:
     Example bridge lines:
       obfs4 1.2.3.4:443 FINGERPRINT cert=... iat-mode=0
     """
-    mgr = get_manager()
-    result = mgr.add_bridge(bridge_line)
+    try:
+        mgr = get_manager()
+        result = mgr.add_bridge(bridge_line)
+    except Exception as exc:
+        return _error(exc, "tor_add_bridge")
     return json.dumps({
+        "ok": True,
         "added": result.added,
         "total_bridges": result.total_bridges,
         "error": result.error,
-        "bridges_file": str(BRIDGES_PATH),
         "hint": "Restart Tor with tor_stop + tor_start to use new bridges",
     })
 

@@ -655,3 +655,53 @@ def test_manager_add_bridge_increases_count(tmp_path, monkeypatch):
     result = mgr.add_bridge("obfs4 5.6.7.8:80 " + "B" * 40 + " cert=abc iat-mode=1")
     assert result.added is True
     assert mgr.status().bridge_count == 2
+
+# ── privacy boundary tests ────────────────────────────────────
+
+
+def test_redact_sensitive_diagnostics(monkeypatch):
+    from hermes_tor.privacy import redact
+
+    monkeypatch.setenv("HOME", "/home/alice")
+    value = (
+        "socks5://user:password@127.0.0.1:9050 "
+        "https://example.test/path?token=secret "
+        "/home/alice/.hermes/tor "
+        "obfs4 198.51.100.1:443 FP cert=secret iat-mode=0"
+    )
+    safe = redact(value)
+    for secret in ("user", "password", "token=secret", "/home/alice", "198.51.100.1", "cert=secret"):
+        assert secret not in safe
+
+
+def test_private_debug_log_is_opt_in_and_owner_only(monkeypatch, tmp_path):
+    from hermes_tor.privacy import private_diagnostic
+
+    path = tmp_path / "private" / "debug.log"
+    monkeypatch.setenv("HERMES_TOR_DEBUG_LOG", str(path))
+    private_diagnostic("test", "secret")
+    assert not path.exists()
+    monkeypatch.setenv("HERMES_TOR_DEBUG", "1")
+    private_diagnostic("test", "https://user:pass@example.test/?secret=yes")
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert path.parent.stat().st_mode & 0o777 == 0o700
+    else:
+        assert path.is_file()
+        assert path.parent.is_dir()
+    assert "pass" not in path.read_text()
+
+
+def test_mcp_status_and_verify_omit_sensitive_fields(monkeypatch):
+    import json
+    from types import SimpleNamespace
+    from hermes_tor import mcp_server
+    from hermes_tor.manager import TorState
+
+    manager = SimpleNamespace(
+        status=lambda: SimpleNamespace(state=TorState.RUNNING, socks_proxy_url="socks5://127.0.0.1:9050", circuit_established=True, bridge_count=2, exit_ip="198.51.100.9", uptime_seconds=1, error=None),
+        verify=lambda: SimpleNamespace(using_tor=True, exit_ip="198.51.100.9", is_anonymous=True, error=None),
+    )
+    monkeypatch.setattr(mcp_server, "get_manager", lambda: manager)
+    assert "exit_ip" not in json.loads(mcp_server.tor_status())
+    assert "exit_ip" not in json.loads(mcp_server.tor_verify())

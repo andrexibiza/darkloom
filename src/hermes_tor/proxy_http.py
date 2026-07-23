@@ -3,18 +3,19 @@
 from __future__ import annotations
 
 import ipaddress
-import logging
 import os
 import socket
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
+from hermes_tor.privacy import get_logger
+
 import httpx
 
 from hermes_tor.policy import NetworkChannel, authorize
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DEFAULT_PROXY = "socks5://127.0.0.1:9050"
 _TRUE_VALUES = frozenset(("1", "true", "yes"))

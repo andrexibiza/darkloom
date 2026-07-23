@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from hermes_tor.secure_files import atomic_private_write, private_lock, secure_read
+
 logger = logging.getLogger(__name__)
 
 MAX_BRIDGE_LINE_LENGTH = 4096
@@ -136,8 +138,14 @@ def load_bridges_from_file(path: Path) -> list[Bridge]:
     if not path.exists():
         logger.warning("No bridges file at %s — Tor will use public relays", path)
         return []
+
+    from hermes_tor.secure_files import private_lock, secure_read
+
+    with private_lock(path):
+        content = secure_read(path)
+
     bridges: list[Bridge] = []
-    for line in path.read_text().splitlines():
+    for line in content.splitlines():
         if not line or line.startswith("#"):
             continue
         bridge = parse_bridge_line(line)
@@ -149,14 +157,27 @@ def load_bridges_from_file(path: Path) -> list[Bridge]:
 
 
 def save_bridges_to_file(path: Path, bridge_lines: list[str], append: bool = False):
-    """Validate and canonically encode bridge lines before writing them."""
+    """Validate and canonically encode bridge lines before writing them.
+
+    Args:
+        path: File path.
+        bridge_lines: List of full bridge lines.
+        append: If True, append to existing file instead of overwriting.
+    """
+    from hermes_tor.secure_files import private_lock, secure_read, atomic_private_write
+
     parsed = [parse_bridge_line(line) for line in bridge_lines]
     if any(bridge is None for bridge in parsed):
         raise ValueError("invalid bridge line")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a" if append else "w", encoding="utf-8", newline="\n") as file:
-        for bridge in parsed:
-            file.write(bridge.line + "\n")  # type: ignore[union-attr]
+
+    with private_lock(path):
+        previous = secure_read(path) if append and path.exists() else ""
+        content = previous + "".join(
+            bridge.line + "\n" for bridge in parsed  # type: ignore[union-attr]
+        )
+        atomic_private_write(path, content)
+
+    logger.info("Wrote %d bridges to %s (append=%s)", len(bridge_lines), path, append)
 
 
 def format_bridges_for_torrc(bridges: list[Bridge]) -> list[str]:

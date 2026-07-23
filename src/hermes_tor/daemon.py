@@ -38,6 +38,7 @@ from hermes_tor.constants import (
     get_geoip_paths,
 )
 from hermes_tor.bridges import Bridge
+from hermes_tor.secure_files import atomic_private_write, private_lock
 
 logger = logging.getLogger(__name__)
 
@@ -490,9 +491,10 @@ class TorDaemon:
         )
 
     def _write_torrc(self):
-        """Write torrc to disk."""
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.data_dir.chmod(0o700)
+        """Write torrc to disk with secure permissions."""
+        from hermes_tor.secure_files import private_lock, atomic_private_write
+
         torrc_content = self._build_torrc()
-        self._torrc_path.write_text(torrc_content)
+        with private_lock(self._torrc_path):
+            atomic_private_write(self._torrc_path, torrc_content)
         logger.debug("torrc written (%d bytes) to %s", len(torrc_content), self._torrc_path)

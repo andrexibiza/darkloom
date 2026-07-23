@@ -327,6 +327,25 @@ def test_format_bridges_for_torrc():
     assert lines == ["Bridge 1.2.3.4:443 " + "A" * 40, "Bridge 5.6.7.8:80 " + "B" * 40]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode assertion")
+def test_private_bridge_permissions_and_symlink_rejection(tmp_path):
+    from hermes_tor.bridges import save_bridges_to_file
+
+    private_dir = tmp_path / "private"
+    path = private_dir / "bridges.txt"
+    save_bridges_to_file(path, ["bridge1"])
+    assert stat.S_IMODE(private_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+    target = tmp_path / "target"
+    target.write_text("do not replace")
+    link = private_dir / "linked.txt"
+    link.symlink_to(target)
+    with pytest.raises(OSError, match="symbolic link"):
+        save_bridges_to_file(link, ["bridge2"])
+    assert target.read_text() == "do not replace"
+
+
 # ── daemon tests ──────────────────────────────────────────────
 
 
@@ -394,6 +413,17 @@ def test_tor_daemon_requires_binary_to_exist(tmp_path):
     with pytest.raises(TorDaemonError, match="Tor binary not found"):
         TorDaemon(tor_binary=tmp_path / "nonexistent_tor", bridges=[])
 
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX mode assertion")
+def test_torrc_is_written_privately(tmp_path):
+    from hermes_tor.daemon import TorDaemon
+
+    fake_tor = tmp_path / "tor"
+    fake_tor.touch()
+    daemon = TorDaemon(fake_tor, data_dir=tmp_path / "data")
+    daemon._write_torrc()
+    assert stat.S_IMODE(daemon.data_dir.stat().st_mode) == 0o700
+    assert stat.S_IMODE((daemon.data_dir / "torrc").stat().st_mode) == 0o600
 
 
 def _daemon_for_isolation_test(tmp_path):
@@ -525,6 +555,19 @@ def test_isolated_client_uses_request_credentials_and_discards_them(
         assert captured["trust_env"] is False
         assert len(daemon._active_credentials) == 1
     assert daemon._active_credentials == set()
+
+
+def test_gateway_uses_dedicated_config_without_rewriting_dotenv(tmp_path, monkeypatch):
+    from hermes_tor.gateway import write_gateway_env_file
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    dotenv = tmp_path / ".hermes" / ".env"
+    dotenv.parent.mkdir()
+    dotenv.write_text('TOKEN="a=b"\n# keep me\n')
+    write_gateway_env_file()
+    assert dotenv.read_text() == 'TOKEN="a=b"\n# keep me\n'
+    tor_env = tmp_path / ".hermes" / "tor" / "gateway.env"
+    assert "TOR_ENABLED=1" in tor_env.read_text()
 
 
 # ── verifier tests ────────────────────────────────────────────

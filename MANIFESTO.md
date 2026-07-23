@@ -247,6 +247,8 @@ python -c "import os; os.environ['TOR_ENABLED']='1'; from darkloom.proxy_http im
 
 ## 5. Self-Healing Topology
 
+![Self-Healing Watchdog — Layered Health Verification](docs/imgs/05-infographic-watchdog.png)
+
 The [`TorWatchdog`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/gateway.py) is a background daemon thread implementing three recovery mechanisms with layered health verification, following the [autonomic computing MAPE loop](https://www.ibm.com/docs/en/autonomic-computing/1.0) (IBM, 2001) and the [Harel statechart formalism](https://www.wisdom.weizmann.ac.il/~dharel/SCANNED.PAPERS/Statecharts.pdf) (Harel, 1987) for state management.
 
 ### 5.1 Watchdog Mechanisms
@@ -284,6 +286,8 @@ PR #1 created `tor_get()`, `tor_post()`, and `check_tor_connection()`. It create
 This is the foundational move: fail-closed. Not "try the proxy, fall back to direct." Not "log a warning and continue." The agent refuses to make a request it cannot route through Tor. Every subsequent PR builds on this principle.
 
 ### PR #2 — Centralized Network Policy
+
+![Darkloom Network Policy — Central Authorization Gate](docs/imgs/03-flowchart-network-policy.png)
 
 An autonomous agent has more egress points than a web browser. Telegram uses httpx. Discord uses aiohttp. Slack uses its own SDK. Photon iMessage spawns a Go binary that speaks gRPC. WhatsApp spawns a Node.js process that opens WebSocket connections. The browser tool launches Chromium with its own network stack. Web tools use the Firecrawl SDK, which creates its own httpx clients internally. execute_code blocks can spawn subprocesses that create arbitrary sockets. That's at least a dozen independent places where a socket gets created, each with its own networking library, its own proxy configuration, its own failure modes. In every other agent framework, each of these egress points is independently configured — or, more commonly, not configured at all. The developer sets `ALL_PROXY` in the environment and hopes every library respects it.
 

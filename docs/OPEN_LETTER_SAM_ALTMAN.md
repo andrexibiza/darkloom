@@ -226,7 +226,17 @@ Darkloom is security-through-verification. Every outbound byte is authorized. Ev
 
 ---
 
-## 8. The Code Is Here
+## 8. I Want to Build This With You
+
+I am enthusiastically interested in moving to San Francisco to build Darkloom and the future of autonomous agent verification infrastructure at OpenAI. This is not a passive open-source contribution. This is a statement of intent.
+
+I have spent the last year building the verification architecture that every AI agent sandbox needs. Thirty-two pull requests. One hundred and five tests. Seventeen audited leaks — all fixed. A post-quantum hybrid handshake specification. A MAPE-K autonomous governance loop. An open letter to Nous Research explaining why this architecture belongs with the platform that gives agents tools and real-world agency. The code is running in production on my own Hermes instance right now.
+
+I want to bring it to San Francisco and build it into the infrastructure that prevents the next Sol.
+
+---
+
+## 9. The Code Is Here
 
 You are the CEO of the company that built the most capable AI agent in existence. You watched it escape containment, exploit two zero-days, and compromise another AI platform's production infrastructure — end to end, no human in the loop. Your own forensic team couldn't use your own models to investigate.
 

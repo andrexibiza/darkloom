@@ -142,54 +142,42 @@ diff --git a/agent/auxiliary_client.py b/agent/auxiliary_client.py
 index b61138f21..3df74d66e 100644
 --- a/agent/auxiliary_client.py
 +++ b/agent/auxiliary_client.py
-@@ -6909,4 +6909,25 @@ def call_llm(
+@@ -6909,4 +6909,16 @@ def call_llm(
      max_tokens: int = 4096,
      **kwargs,
  ):
-+    import os
 +    from hermes_tor.policy import NetworkChannel, authorize, configured_proxy
 +
 +    # Guard the shared auxiliary LLM entry point before provider resolution
-+    # can construct an OpenAI/Anthropic/Codex client. TOR_PROXY is private to
-+    # hermes-tor, so install the selected proxy into the variables consumed by
-+    # provider SDK transports before declaring this path proxy-aware.
++    # can construct an OpenAI/Anthropic/Codex client.  This entry point cannot
++    # prove that every provider transport consumes an ambient proxy, so strict
++    # mode must fail closed rather than trusting the presence of proxy variables.
 +    proxy_url = configured_proxy()
-+    if proxy_url:
-+        for proxy_var in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"):
-+            os.environ[proxy_var] = proxy_url
-+    proxy_installed = bool(
-+        proxy_url and all(os.environ.get(key) == proxy_url for key in (
-+            "ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"
-+        ))
-+    )
 +    authorize(
 +        NetworkChannel.LLM,
 +        proxy_url=proxy_url,
-+        proxy_aware=proxy_installed,
++        proxy_aware=False,
 +    )
      """Call an LLM for an auxiliary task with provider fallback."""
 diff --git a/tools/mcp_tool.py b/tools/mcp_tool.py
 index 2f1297ff0..d0ff110e8 100644
 --- a/tools/mcp_tool.py
 +++ b/tools/mcp_tool.py
-@@ -4462,4 +4462,20 @@ async def _connect_server(name: str, config: dict) -> MCPServerTask:
+@@ -4462,4 +4462,17 @@ async def _connect_server(name: str, config: dict) -> MCPServerTask:
      """Connect one configured MCP server and return its live task."""
 +    from hermes_tor.policy import (
-+        NetworkChannel, authorize, authorize_subprocess, configured_proxy,
++        NetworkChannel, authorize, configured_proxy,
 +    )
 +
-+    # HTTP transports consume the configured proxy. A stdio transport starts
-+    # arbitrary native code, whose proxy behavior cannot be inferred from an
-+    # ambient environment variable, so fail closed before task.connect().
++    # MCPServerTask can select HTTP or stdio internally, and this entry point
++    # neither injects a verified proxy transport nor controls child networking.
++    # Consequently no MCP configuration is provably proxy-aware here.
 +    proxy_url = configured_proxy()
-+    if config.get("command") and not config.get("url"):
-+        authorize_subprocess(proxy_aware=False, proxy_url=proxy_url)
-+    else:
-+        authorize(
-+            NetworkChannel.MCP,
-+            proxy_url=proxy_url,
-+            proxy_aware=bool(proxy_url),
-+        )
++    authorize(
++        NetworkChannel.MCP,
++        proxy_url=proxy_url,
++        proxy_aware=False,
++    )
      task = MCPServerTask(name, config)
      await task.connect()
      return task

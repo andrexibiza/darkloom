@@ -11,7 +11,6 @@ Key design decisions:
     because select.select() only works on sockets on Windows.
   - Process management uses terminate() on Windows, SIGINT on Linux.
 """
-import logging
 import os
 import queue
 import secrets

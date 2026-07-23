@@ -317,65 +317,81 @@ def is_llm_skipped() -> bool:
     return os.environ.get("TOR_SKIP_LLM", "").lower() in ("1", "true", "yes")
 
 
+def _dotenv_assignment(line: str) -> Optional[str]:
+    """Return the key for a simple dotenv assignment, if present."""
+    candidate = line.lstrip()
+    if candidate.startswith("export "):
+        candidate = candidate[7:].lstrip()
+    key, separator, _ = candidate.partition("=")
+    return key.strip() if separator else None
+
+
 def write_gateway_env_file(
     socks_port: int = DEFAULT_SOCKS_PORT,
     env_path: Optional[Path] = None,
     healthy: bool = True,
 ):
-    """Write proxy vars to a dedicated private Tor environment file.
-
-    Keeping Tor values separate avoids parsing or rewriting the gateway's
-    credential-bearing ``~/.hermes/.env`` file.
+    """Persist proxy vars in the environment file loaded by Hermes.
 
     Args:
         socks_port: SOCKS5 port (default: 9050)
-        env_path: Path to .env file (default: ~/.hermes/tor/gateway.env)
+        env_path: Path to .env file (default: ~/.hermes/.env)
         healthy: If False, TOR_ENABLED and TOR_HEALTH are set to 0
     """
     if env_path is None:
-        env_path = Path.home() / ".hermes" / "tor" / "gateway.env"
+        env_path = Path.home() / ".hermes" / ".env"
 
     proxy_url = f"socks5://127.0.0.1:{socks_port}"
 
-    # Read existing .env content
-    existing = {}
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, value = line.partition("=")
-                existing[key.strip()] = value.strip()
-
-    # Merge Tor proxy vars (preserve existing non-Tor vars)
     tor_vars = _policy_environment(
-        ProxyPolicy(proxy_url, strict=False), environment=existing
+        ProxyPolicy(proxy_url, strict=False), environment={}
     )
     tor_vars["TOR_HEALTH"] = "1" if healthy else "0"
     if not healthy:
         tor_vars["TOR_ENABLED"] = "0"
-    existing.update(tor_vars)
-
-    # Write back — atomic private write so readers see either complete version
-    lines = []
-    for key, value in sorted(existing.items()):
-        lines.append(f"{key}={value}")
-    content = "\n".join(lines) + "\n"
-
+    # Preserve credentials, comments, quoting, and ordering byte-for-byte. Only
+    # replace assignments owned by this integration, then append fresh values.
     with private_lock(env_path):
+        if env_path.is_symlink():
+            raise OSError(f"refusing symbolic link: {env_path}")
+        existing_lines = (
+            env_path.read_text().splitlines(keepends=True) if env_path.exists() else []
+        )
+        retained = [
+            line for line in existing_lines if _dotenv_assignment(line) not in tor_vars
+        ]
+        if retained and not retained[-1].endswith(("\n", "\r")):
+            retained[-1] += "\n"
+        content = "".join(retained) + "".join(
+            f"{key}={value}\n" for key, value in sorted(tor_vars.items())
+        )
         atomic_private_write(env_path, content)
     logger.info("Gateway Tor config written to %s (%d vars)", env_path, len(tor_vars))
 
 
 def remove_gateway_env_file(env_path: Optional[Path] = None):
-    """Remove the dedicated Tor proxy environment file."""
+    """Remove Tor-owned settings from the Hermes environment file."""
     if env_path is None:
-        env_path = Path.home() / ".hermes" / "tor" / "gateway.env"
+        env_path = Path.home() / ".hermes" / ".env"
 
     with private_lock(env_path):
         if env_path.is_symlink():
             raise OSError(f"refusing symbolic link: {env_path}")
         if env_path.exists():
-            env_path.unlink()
+            managed = set(
+                _policy_environment(
+                    ProxyPolicy(
+                        f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}", strict=False
+                    ),
+                    environment={},
+                )
+            ) | {"TOR_HEALTH"}
+            content = "".join(
+                line
+                for line in env_path.read_text().splitlines(keepends=True)
+                if _dotenv_assignment(line) not in managed
+            )
+            atomic_private_write(env_path, content)
     logger.info("Gateway Tor config removed from %s", env_path)
 
 

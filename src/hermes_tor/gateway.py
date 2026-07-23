@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 import sys
 import threading
 import time
@@ -45,6 +46,8 @@ from hermes_tor.constants import (
 )
 if TYPE_CHECKING:
     from hermes_tor.manager import TorManager
+
+from hermes_tor.policy import authorize_subprocess
 
 from hermes_tor.secure_files import atomic_private_write, private_lock
 
@@ -546,6 +549,9 @@ def start_tor_for_gateway(
     socks_port: int = DEFAULT_SOCKS_PORT,
     bootstrap_timeout: float = 60.0,
     write_env: bool = True,
+    *,
+    hermes_root=None,
+    runtime_probes=None,
 ) -> TorManager:
     """Start Tor and inject gateway-wide proxy environment.
 
@@ -556,6 +562,10 @@ def start_tor_for_gateway(
         socks_port: SOCKS5 port (default: 9050)
         bootstrap_timeout: Max seconds to wait for Tor bootstrap
         write_env: If True, persist ALL_PROXY to ~/.hermes/.env
+        hermes_root: Hermes checkout to verify (defaults to automatic discovery)
+        runtime_probes: Mapping of control IDs to zero-argument verification
+            callables. Strict mode requires probes for controls that cannot be
+            established from the installed files alone.
 
     Returns:
         TorManager instance (call .stop() to shut down)
@@ -578,6 +588,17 @@ def start_tor_for_gateway(
     require_verified_proxy_clients(
         policy, *(name.removesuffix("_PROXY").lower() for name in _PLATFORM_PROXY_NAMES)
     )
+
+    # Validate Hermes integrations before Tor bootstrap.
+    # Strict mode fails closed before Hermes can establish any connections.
+    from hermes_tor.hardening import verify_compatibility
+
+    compatibility = verify_compatibility(
+        hermes_root, strict=None, runtime_probes=runtime_probes)
+    for result in compatibility:
+        logger.info("Hermes control %s: %s (%s)", result.control.id,
+                    result.status.value, result.evidence.value)
+
     from hermes_tor.manager import TorManager
 
     mgr = TorManager(auto_download=not policy.strict, socks_port=socks_port)
@@ -636,6 +657,24 @@ def start_tor_for_gateway(
     mgr._watchdog = watchdog
 
     return mgr
+
+
+def _is_proxy_aware_gateway_command(command: list[str]) -> bool:
+    """Return whether *command* is the installed Hermes gateway launcher.
+
+    Arbitrary executables may ignore proxy environment variables, so strict
+    mode only authorizes the known Hermes gateway entry point.
+    """
+    if len(command) < 3 or command[1:3] != ["gateway", "run"]:
+        return False
+    executable = shutil.which(command[0])
+    if executable is None:
+        return False
+    try:
+        launcher = Path(executable).read_text(encoding="utf-8", errors="ignore")
+    except (OSError, UnicodeError):
+        return False
+    return "hermes_cli" in launcher and "import main" in launcher
 
 
 # ── CLI entry point ────────────────────────────────────────────
@@ -705,6 +744,7 @@ def main():
 
     # Exec the gateway
     try:
+        authorize_subprocess(proxy_aware=_is_proxy_aware_gateway_command(gateway_cmd))
         result = subprocess.run(gateway_cmd)
         sys.exit(result.returncode)
     finally:

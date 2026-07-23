@@ -108,6 +108,25 @@ def test_gateway_wrapper_refuses_non_proxy_aware_launch(monkeypatch):
 
 
 
+def test_gateway_command_must_be_verified_as_hermes_launcher(monkeypatch, tmp_path):
+    import sys
+
+    from hermes_tor.gateway import _is_proxy_aware_gateway_command
+
+    # On Windows, shutil.which honours PATHEXT; on POSIX any executable
+    # file with +x is found.  Use the platform extension so the test
+    # binary is discoverable in PATH.
+    _ext = ".cmd" if sys.platform == "win32" else ""
+
+    native = tmp_path / ("native-helper" + _ext)
+    native.write_bytes(b"MZ\x90\x00 ignores proxy variables")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert not _is_proxy_aware_gateway_command(["native-helper", "gateway", "run"])
+
+    launcher = tmp_path / ("hermes" + _ext)
+    launcher.write_text("from hermes_cli.main import main\nmain()\n")
+    assert _is_proxy_aware_gateway_command(["hermes", "gateway", "run"])
+    assert not _is_proxy_aware_gateway_command(["hermes", "chat"])
 
 
 def test_hermes_patch_guards_every_declared_network_entry_point():

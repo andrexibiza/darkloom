@@ -101,6 +101,46 @@ def test_strict_compatibility_fails_closed_without_hermes(tmp_path):
         verify_compatibility(tmp_path, strict=True)
 
 
+def test_gateway_strict_mode_verifies_before_starting_tor(monkeypatch, tmp_path):
+    from hermes_tor import gateway
+    from hermes_tor import manager
+    from hermes_tor.hardening import CompatibilityError
+
+    monkeypatch.setenv("TOR_STRICT_MODE", "1")
+    # Silence the platform-client verification so we can reach the
+    # compatibility/TorManager ordering check.
+    monkeypatch.setattr(gateway, "require_verified_proxy_clients", lambda *a, **kw: None)
+
+    class UnexpectedTorManager:
+        def __init__(self, *args, **kwargs):
+            pytest.fail("Tor started before compatibility verification")
+
+    monkeypatch.setattr(manager, "TorManager", UnexpectedTorManager)
+
+    with pytest.raises(CompatibilityError, match="strict mode rejected"):
+        gateway.start_tor_for_gateway(hermes_root=tmp_path)
+
+
+def test_gateway_cli_denies_arbitrary_subprocess_in_strict_mode(monkeypatch):
+    import subprocess
+
+    from hermes_tor import gateway
+    from hermes_tor.policy import NetworkPolicyError
+
+    class FakeManager:
+        def stop(self):
+            pass
+
+    monkeypatch.setenv("TOR_STRICT_MODE", "1")
+    monkeypatch.setattr(gateway, "start_tor_for_gateway", lambda **kwargs: FakeManager())
+    monkeypatch.setattr(subprocess, "run",
+                        lambda command: pytest.fail("unauthorized child was launched"))
+    monkeypatch.setattr("sys.argv", ["hermes-tor", "--", "python", "unsafe.py"])
+
+    with pytest.raises(NetworkPolicyError, match="non-proxy-aware subprocess"):
+        gateway.main()
+
+
 def test_documentation_is_not_reported_as_enforcement(tmp_path):
     from hermes_tor.hardening import EvidenceKind, ControlStatus, verify_compatibility
 

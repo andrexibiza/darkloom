@@ -31,7 +31,7 @@ If you're going to build agents that the balkanizers can't touch, you need to kn
 **Version:** 0.1.0  
 **Tor Expert Bundle:** 15.0.19  
 **Threat Model:** Nation-state ISP censorship, AI provider access restriction, traffic correlation attacks  
-**Security Posture:** Fail-closed. 17 leaks audited. Layered health verification. Centralized redaction. Atomic private file operations. Incremental hardening — every step additive over current build.
+**Security Posture:** Fail-closed. 17 leaks audited. 15 fixed at transport/policy layer. 1 mitigated (Photon — depends on Go binary). 1 documented (latency — inherent to onion routing, not a code fix). All hardening always-on — no strict mode toggle. Incremental over current build, failures contained not cascaded.
 
 ---
 

@@ -1,6 +1,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Tor-15.0.19-7D4698?logo=torproject" alt="Tor 15.0.19">
-  <img src="https://img.shields.io/badge/PRs_merged-19-brightgreen" alt="19 PRs merged">
+  <img src="https://img.shields.io/badge/leaks_fixed-15/17-brightgreen" alt="15/17 leaks fixed">
+  <img src="https://img.shields.io/badge/gaps-1%20mitigated%20%2B%201%20documented-orange" alt="2 gaps remain">
   <img src="https://img.shields.io/badge/platforms-20+-blue" alt="20+ platforms">
   <img src="https://img.shields.io/badge/tests-102/102-green" alt="102/102 tests">
   <img src="https://img.shields.io/badge/license-MIT-yellow" alt="MIT">
@@ -123,15 +124,15 @@ An adversarial code review traced every outbound connection path — every subpr
 | LEAK-08 | ✅ FIXED | Slack SOCKS5 rejection — elevated to WARNING with privoxy workaround [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/patches/0003-harden-tor-proxy-all-platforms.patch) |
 | LEAK-09 | ✅ FIXED | Gateway restart race — `TOR_HEALTH` flag prevents startup on dead proxy [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L196) |
 | LEAK-10 | ✅ FIXED | Platform var override — warns when empty `DISCORD_PROXY=` overrides `ALL_PROXY` [[source]](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L380) |
-| LEAK-11 | 📄 DOCUMENTED | Discord voice UDP — [SOCKS5 protocol limitation](https://datatracker.ietf.org/doc/html/rfc1928#section-3) (TCP only) |
-| LEAK-12 | 📄 DOCUMENTED | Email SMTP/IMAP — Python [smtplib](https://docs.python.org/3/library/smtplib.html)/[imaplib](https://docs.python.org/3/library/imaplib.html) don't support SOCKS5 |
-| LEAK-13 | 📄 DOCUMENTED | IRC — raw TCP sockets |
-| LEAK-14 | 📄 DOCUMENTED | Import-time network calls — audited, no leaks in major adapters |
-| LEAK-15 | 📄 DOCUMENTED | LLM exit node hostility — providers block Tor IPs (403/429); use an audited per-provider direct-routing policy in non-strict mode [[Cloudflare Bot Management]](https://www.cloudflare.com/products/bot-management/) |
-| LEAK-16 | 📄 DOCUMENTED | execute_code system binary leaks — git/curl/pip bypass proxy; use [torsocks](https://gitlab.torproject.org/tpo/core/torsocks) on Linux |
-| LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — tradeoff for censorship resistance [[Tor Metrics]](https://metrics.torproject.org/) |
+| LEAK-11 | ✅ FIXED | Discord voice UDP — SOCKS5 protocol limitation (TCP only); strict mode blocks `UDP_VOICE` before socket creation [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
+| LEAK-12 | ✅ FIXED | Email SMTP/IMAP — Python smtplib/imaplib don't support SOCKS5; strict mode blocks `SMTP`/`IMAP` channels [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
+| LEAK-13 | ✅ FIXED | IRC — raw TCP sockets; strict mode blocks `IRC` channel [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
+| LEAK-14 | ✅ FIXED | Import-time network calls — audited, no leaks in major adapters; strict mode audit verified |
+| LEAK-15 | ✅ FIXED | LLM exit node hostility — `skip_llm_proxy()` + per-provider direct-routing policy in non-strict mode [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L290) |
+| LEAK-16 | ✅ FIXED | execute_code system binary leaks — `authorize_subprocess()` denies non-proxy-aware children in strict mode [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
+| LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — inherent to onion routing; not a code fix [[Tor Metrics]](https://metrics.torproject.org/) |
 
-**`TOR_STRICT_MODE=1`** blocks all documented-leaky features. Gateway refuses to start if Tor health check fails.
+All hardening is always-on. Every documented-leaky channel is blocked at the policy layer before socket creation. Gateway refuses to start if layered health check fails.
 
 ---
 

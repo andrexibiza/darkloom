@@ -1,27 +1,25 @@
-"""Tor anonymity verifier.
-
-Validates that HTTP traffic is routing through the Tor network
-by hitting check.torproject.org through the SOCKS5 proxy.
-"""
+"""End-to-end Tor route verification over TLS-validating SOCKS."""
+import asyncio
+import ipaddress
 import logging
-import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import httpx
 from hermes_tor.policy import NetworkChannel, authorize
 
 logger = logging.getLogger(__name__)
-
-CHECK_URL = "https://check.torproject.org/"
+DEFAULT_CHECK_ENDPOINTS = (
+    "https://check.torproject.org/api/ip",
+    "https://api.ipify.org?format=json",
+)
 
 
 @dataclass
 class VerificationResult:
-    """Result of a Tor anonymity check."""
-
     using_tor: bool
     exit_ip: str | None = None
     error: str | None = None
+    observations: dict[str, str] = field(default_factory=dict)
 
     @property
     def is_anonymous(self) -> bool:
@@ -29,80 +27,50 @@ class VerificationResult:
 
 
 class TorVerifier:
-    """Verifies that traffic routes through the Tor network."""
+    """Require Tor's structured assertion plus an independent observation."""
 
-    # Patterns from check.torproject.org responses
-    _CONGRATULATIONS_RE = re.compile(
-        r"Congratulations[^<]*This browser is configured to use Tor",
-        re.IGNORECASE,
-    )
-    _SORRY_RE = re.compile(
-        r"Sorry[^<]*You are not using Tor",
-        re.IGNORECASE,
-    )
-    _IP_RE = re.compile(
-        r"IP address appears to be:\s*<strong>([\d.]+)</strong>",
-        re.IGNORECASE,
-    )
-
-    def __init__(
-        self,
-        socks_proxy_url: str = "socks5://127.0.0.1:9050",
-        timeout: float = 30.0,
-    ):
+    def __init__(self, socks_proxy_url="socks5://127.0.0.1:9050", timeout=30.0,
+                 endpoints=DEFAULT_CHECK_ENDPOINTS):
         self.socks_proxy_url = socks_proxy_url
         self.timeout = timeout
+        self.endpoints = tuple(endpoints)
+
+    @staticmethod
+    def _valid_ip(value) -> str | None:
+        try:
+            return str(ipaddress.ip_address(value))
+        except (ValueError, TypeError):
+            return None
 
     def verify(self) -> VerificationResult:
-        """Check if HTTP traffic routes through Tor. Synchronous."""
+        """Verify TLS, structured JSON, Tor status, and matching exit IPs."""
+        observations = {}
         try:
             authorize(NetworkChannel.HTTP, proxy_url=self.socks_proxy_url)
             transport = httpx.HTTPTransport(proxy=self.socks_proxy_url)
-            with httpx.Client(
-                transport=transport,
-                timeout=self.timeout,
-                follow_redirects=True,
-            ) as client:
-                resp = client.get(CHECK_URL)
-                return self._parse_response(resp.text, resp.status_code)
-        except Exception as e:
-            logger.error("Verification failed: %s", e)
-            return VerificationResult(using_tor=False, error=str(e))
+            # Default verify=True validates the normal CA chain and hostname.
+            with httpx.Client(transport=transport, timeout=self.timeout,
+                              follow_redirects=False) as client:
+                response = client.get(self.endpoints[0])
+                response.raise_for_status()
+                data = response.json()
+                tor_ip = self._valid_ip(data.get("IP"))
+                if data.get("IsTor") is not True or not tor_ip:
+                    return VerificationResult(False, tor_ip, "Tor API did not confirm this route")
+                observations[self.endpoints[0]] = tor_ip
+                for endpoint in self.endpoints[1:]:
+                    response = client.get(endpoint)
+                    response.raise_for_status()
+                    observed_ip = self._valid_ip(response.json().get("ip"))
+                    if not observed_ip:
+                        return VerificationResult(False, tor_ip, f"Invalid observation from {endpoint}", observations)
+                    observations[endpoint] = observed_ip
+                    if observed_ip != tor_ip:
+                        return VerificationResult(False, tor_ip, "Independent exit observations disagree", observations)
+            return VerificationResult(True, tor_ip, observations=observations)
+        except Exception as exc:
+            logger.error("Verification failed: %s", exc)
+            return VerificationResult(False, error=str(exc), observations=observations)
 
     async def verify_async(self) -> VerificationResult:
-        """Async version for use in async contexts."""
-        try:
-            authorize(NetworkChannel.HTTP, proxy_url=self.socks_proxy_url)
-            transport = httpx.AsyncHTTPTransport(proxy=self.socks_proxy_url)
-            async with httpx.AsyncClient(
-                transport=transport,
-                timeout=self.timeout,
-                follow_redirects=True,
-            ) as client:
-                resp = await client.get(CHECK_URL)
-                return self._parse_response(resp.text, resp.status_code)
-        except Exception as e:
-            logger.error("Verification failed: %s", e)
-            return VerificationResult(using_tor=False, error=str(e))
-
-    @classmethod
-    def _parse_response(cls, html: str, status_code: int) -> VerificationResult:
-        """Parse check.torproject.org response."""
-        if status_code != 200:
-            return VerificationResult(
-                using_tor=False,
-                error=f"HTTP {status_code}",
-            )
-
-        exit_ip = None
-        ip_match = cls._IP_RE.search(html)
-        if ip_match:
-            exit_ip = ip_match.group(1)
-
-        using_tor = bool(cls._CONGRATULATIONS_RE.search(html))
-
-        return VerificationResult(
-            using_tor=using_tor,
-            exit_ip=exit_ip,
-            error=None if using_tor else "Not routing through Tor",
-        )
+        return await asyncio.to_thread(self.verify)

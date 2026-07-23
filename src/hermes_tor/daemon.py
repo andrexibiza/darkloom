@@ -348,7 +348,7 @@ class TorDaemon:
         logger.info("Tor daemon stopped")
 
     def health_check(self) -> bool:
-        """Check if SOCKS5 port is accepting connections."""
+        """Complete SOCKS5 method negotiation with the managed daemon."""
         if not self.is_running:
             return False
 
@@ -357,9 +357,57 @@ class TorDaemon:
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(2)
-            result = sock.connect_ex(("127.0.0.1", self.socks_port))
+            sock.connect(("127.0.0.1", self.socks_port))
+            sock.sendall(b"\x05\x01\x00")
+            result = sock.recv(2) == b"\x05\x00"
             sock.close()
-            return result == 0
+            return result
+        except Exception:
+            return False
+
+    def process_health(self) -> bool:
+        """Verify this object still owns the exact live Tor subprocess."""
+        if not self.is_running or self._process is None or self._process.pid <= 0:
+            return False
+        if os.name != "nt":
+            try:
+                return Path(f"/proc/{self._process.pid}/exe").resolve() == self.tor_binary.resolve()
+            except OSError:
+                return False
+        return True
+
+    def bootstrap_status(self) -> tuple[int | None, str | None]:
+        """Read authenticated bootstrap progress from Tor's ControlPort."""
+        if not self.process_health():
+            return None, "managed Tor process is not healthy"
+        try:
+            import re
+            import socket
+            cookie = (self.data_dir / "control_auth_cookie").read_bytes().hex().encode()
+            with socket.create_connection(("127.0.0.1", self.control_port), timeout=3) as sock:
+                sock.sendall(b"AUTHENTICATE " + cookie + b"\r\n")
+                if not sock.recv(1024).startswith(b"250"):
+                    return None, "control authentication failed"
+                sock.sendall(b"GETINFO status/bootstrap-phase\r\nQUIT\r\n")
+                response = sock.recv(4096).decode("utf-8", "replace")
+            match = re.search(r"PROGRESS=(\d+)", response)
+            return (int(match.group(1)), None) if match else (None, "missing bootstrap progress")
+        except Exception as exc:
+            return None, str(exc)
+
+    def signal_newnym(self) -> bool:
+        """Authenticate to the owned daemon and request fresh circuits."""
+        if not self.process_health():
+            return False
+        try:
+            import socket
+            cookie = (self.data_dir / "control_auth_cookie").read_bytes().hex().encode()
+            with socket.create_connection(("127.0.0.1", self.control_port), timeout=5) as sock:
+                sock.sendall(b"AUTHENTICATE " + cookie + b"\r\n")
+                if not sock.recv(1024).startswith(b"250"):
+                    return False
+                sock.sendall(b"SIGNAL NEWNYM\r\n")
+                return sock.recv(1024).startswith(b"250")
         except Exception:
             return False
 

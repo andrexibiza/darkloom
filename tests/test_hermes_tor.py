@@ -591,17 +591,22 @@ def test_isolated_client_uses_request_credentials_and_discards_them(
     assert daemon._active_credentials == set()
 
 
-def test_gateway_uses_dedicated_config_without_rewriting_dotenv(tmp_path, monkeypatch):
-    from hermes_tor.gateway import write_gateway_env_file
+def test_gateway_persists_config_without_rewriting_existing_dotenv(tmp_path, monkeypatch):
+    from hermes_tor.gateway import remove_gateway_env_file, write_gateway_env_file
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     dotenv = tmp_path / ".hermes" / ".env"
     dotenv.parent.mkdir()
     dotenv.write_text('TOKEN="a=b"\n# keep me\n')
     write_gateway_env_file()
+    persisted = dotenv.read_text()
+    assert persisted.startswith('TOKEN="a=b"\n# keep me\n')
+    assert "ALL_PROXY=socks5://127.0.0.1:9050\n" in persisted
+    assert "TOR_ENABLED=1\n" in persisted
+    assert not (tmp_path / ".hermes" / "tor" / "gateway.env").exists()
+
+    remove_gateway_env_file()
     assert dotenv.read_text() == 'TOKEN="a=b"\n# keep me\n'
-    tor_env = tmp_path / ".hermes" / "tor" / "gateway.env"
-    assert "TOR_ENABLED=1" in tor_env.read_text()
 
 
 # ── verifier tests ────────────────────────────────────────────

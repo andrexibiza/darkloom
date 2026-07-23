@@ -276,7 +276,7 @@ Step 3: Hermes gateway inherits ALL_PROXY
 - Self-healing watchdog: layered health check (process + SOCKS5 + bootstrap + route), auto-restart, circuit rotation
 - Cross-platform daemon code (Windows + Linux)
 - Zero secrets in repo (verified by grep scan + centralized redaction module)
-- Gateway uses dedicated `~/.hermes/tor/gateway.env` — never rewrites credential-bearing `~/.hermes/.env`
+- Gateway persists Tor-owned settings in the Hermes-loaded `~/.hermes/.env` while preserving credentials and comments
 - Bridge rotation hardened: all-or-nothing validation, atomic private writes, no bridge lines in logs
 
 ---

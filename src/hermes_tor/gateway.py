@@ -319,61 +319,71 @@ def write_gateway_env_file(
     env_path: Optional[Path] = None,
     healthy: bool = True,
 ):
-    """Write proxy vars to a dedicated private Tor environment file.
+    """Persist proxy vars in the environment file loaded by Hermes.
 
-    Keeping Tor values separate avoids parsing or rewriting the gateway's
-    credential-bearing ``~/.hermes/.env`` file.
+    Existing credentials, comments, and formatting are retained verbatim;
+    only variables managed by this integration are replaced.
 
     Args:
         socks_port: SOCKS5 port (default: 9050)
-        env_path: Path to .env file (default: ~/.hermes/tor/gateway.env)
+        env_path: Path to .env file (default: ~/.hermes/.env)
         healthy: If False, TOR_ENABLED and TOR_HEALTH are set to 0
     """
     if env_path is None:
-        env_path = Path.home() / ".hermes" / "tor" / "gateway.env"
+        env_path = Path.home() / ".hermes" / ".env"
 
     proxy_url = f"socks5://127.0.0.1:{socks_port}"
 
-    # Read existing .env content
-    existing = {}
-    if env_path.exists():
-        for line in env_path.read_text().splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                key, _, value = line.partition("=")
+    with private_lock(env_path):
+        content = env_path.read_text() if env_path.exists() else ""
+        existing = {}
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#") and "=" in stripped:
+                key, _, value = stripped.partition("=")
                 existing[key.strip()] = value.strip()
 
-    # Merge Tor proxy vars (preserve existing non-Tor vars)
-    tor_vars = _policy_environment(
-        ProxyPolicy(proxy_url, strict=False), environment=existing
-    )
-    tor_vars["TOR_HEALTH"] = "1" if healthy else "0"
-    if not healthy:
-        tor_vars["TOR_ENABLED"] = "0"
-    existing.update(tor_vars)
+        tor_vars = _policy_environment(
+            ProxyPolicy(proxy_url, strict=False), environment=existing
+        )
+        tor_vars["TOR_HEALTH"] = "1" if healthy else "0"
+        if not healthy:
+            tor_vars["TOR_ENABLED"] = "0"
 
-    # Write back — atomic private write so readers see either complete version
-    lines = []
-    for key, value in sorted(existing.items()):
-        lines.append(f"{key}={value}")
-    content = "\n".join(lines) + "\n"
-
-    with private_lock(env_path):
+        # Drop stale managed assignments, but retain every other byte of the
+        # credential-bearing file before appending the current Tor values.
+        retained = []
+        for line in content.splitlines(keepends=True):
+            stripped = line.strip()
+            key = stripped.partition("=")[0].strip() if "=" in stripped else None
+            if key not in tor_vars:
+                retained.append(line)
+        content = "".join(retained)
+        if content and not content.endswith(("\n", "\r")):
+            content += "\n"
+        content += "".join(f"{key}={value}\n" for key, value in sorted(tor_vars.items()))
         atomic_private_write(env_path, content)
     logger.info("Gateway Tor config written to %s (%d vars)", env_path, len(tor_vars))
 
 
 def remove_gateway_env_file(env_path: Optional[Path] = None):
-    """Remove the dedicated Tor proxy environment file."""
+    """Remove Tor-owned values from the Hermes environment file."""
     if env_path is None:
-        env_path = Path.home() / ".hermes" / "tor" / "gateway.env"
+        env_path = Path.home() / ".hermes" / ".env"
 
     with private_lock(env_path):
         if env_path.is_symlink():
             raise OSError(f"refusing symbolic link: {env_path}")
         if env_path.exists():
-            env_path.unlink()
-    logger.info("Gateway Tor config removed from %s", env_path)
+            managed = set(GATEWAY_ENV_VARS) | {"TOR_HEALTH"}
+            retained = []
+            for line in env_path.read_text().splitlines(keepends=True):
+                stripped = line.strip()
+                key = stripped.partition("=")[0].strip() if "=" in stripped else None
+                if key not in managed:
+                    retained.append(line)
+            atomic_private_write(env_path, "".join(retained))
+    logger.info("Gateway Tor values removed from %s", env_path)
 
 
 # ═══════════════════════════════════════════════════════════════

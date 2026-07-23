@@ -154,7 +154,7 @@ HTTP proxies ([RFC 7230](https://datatracker.ietf.org/doc/html/rfc7230) §2.3) o
 Two Python libraries implement the SOCKS5 protocol for HTTP libraries:
 
 **httpx + socksio:**
-The [httpx](https://www.python-httpx.org/) library (v0.28.1, already in Hermes venv) supports SOCKS5 via the `proxy` parameter on `HTTPTransport` and `AsyncHTTPTransport`. Internally, httpx delegates to [socksio](https://github.com/sethmlarson/socksio) (v1.0.0, already in Hermes venv) — a sans-I/O implementation of SOCKS4, SOCKS4a, and SOCKS5. Source: `httpx._transports.AsyncHTTPTransport.__init__` accepts `proxy: str | None`.
+The supported dependency matrix is Python `>=3.11`, `httpx[socks]>=0.28,<0.29`, and the `socksio==1.*` backend selected by that extra. The packaging smoke test currently validates HTTPX 0.28.1 with socksio 1.0.0. Plain `httpx` is **not** supported because it does not install the optional SOCKS backend. Both `HTTPTransport` and `AsyncHTTPTransport` are constructed locally at Tor startup, without issuing a request. If either construction fails, startup reports the stable `SOCKS transport unavailable` error and stops; no direct fallback is attempted. Internally, httpx delegates SOCKS negotiation to [socksio](https://github.com/sethmlarson/socksio), a sans-I/O implementation of SOCKS4, SOCKS4a, and SOCKS5.
 
 Usage:
 ```python

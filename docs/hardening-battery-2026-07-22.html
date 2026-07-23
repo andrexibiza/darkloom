@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1400">
+<title>hermes-tor Hardening Battery</title>
+<style>
+  @font-face {
+    font-family: 'Mondwest';
+    src: local('PPMondwest-Regular'), local('PPMondwest');
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+
+  body{
+    background:#0d2a22;
+    color:#ffe6cb;
+    font-family:'Mondwest', 'Courier New', monospace;
+    padding:36px 52px;
+    min-width:1400px;
+    position:relative;
+    overflow-x:hidden;
+  }
+
+  /* Xerox decay texture overlay */
+  body::before{
+    content:'';
+    position:fixed;
+    top:0;left:0;right:0;bottom:0;
+    background:
+      repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(224,92,58,0.015) 2px, rgba(224,92,58,0.015) 3px),
+      radial-gradient(ellipse at 20% 80%, rgba(224,92,58,0.04) 0%, transparent 50%),
+      radial-gradient(ellipse at 80% 20%, rgba(58,140,110,0.03) 0%, transparent 50%);
+    pointer-events:none;
+    z-index:0;
+  }
+
+  /* Risograph grain */
+  body::after{
+    content:'';
+    position:fixed;
+    top:0;left:0;right:0;bottom:0;
+    background-image:url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E");
+    pointer-events:none;
+    z-index:0;
+  }
+
+  .content{position:relative;z-index:1}
+
+  /* NOUS mark */
+  .nous-mark{
+    position:absolute;
+    top:20px;right:30px;
+    font-size:11px;
+    color:rgba(224,92,58,0.2);
+    letter-spacing:4px;
+    text-transform:uppercase;
+    z-index:0;
+  }
+
+  h1{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:28px;
+    font-weight:700;
+    color:#e05c3a;
+    text-align:center;
+    letter-spacing:3px;
+    margin-bottom:4px;
+    text-transform:uppercase;
+  }
+  .sub{
+    text-align:center;
+    color:rgba(255,230,203,0.5);
+    font-size:11px;
+    margin-bottom:28px;
+    letter-spacing:1px;
+  }
+
+  /* Big stat */
+  .hero{
+    text-align:center;
+    margin-bottom:28px;
+    padding:32px 20px 24px;
+    border:1px solid rgba(224,92,58,0.25);
+    border-left:none;border-right:none;
+  }
+  .hero-num{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:96px;
+    font-weight:700;
+    color:#e05c3a;
+    line-height:1;
+    letter-spacing:-2px;
+  }
+  .hero-label{
+    font-size:13px;
+    color:rgba(255,230,203,0.5);
+    margin-top:6px;
+    letter-spacing:2px;
+    text-transform:uppercase;
+  }
+  .hero-sub{
+    font-size:10px;
+    color:rgba(58,140,110,0.6);
+    margin-top:4px;
+  }
+
+  /* PR grid */
+  .grid{
+    display:grid;
+    grid-template-columns:repeat(5,1fr);
+    gap:6px;
+    margin-bottom:24px;
+  }
+  .pr{
+    background:rgba(17,46,36,0.7);
+    border:1px solid rgba(74,107,92,0.3);
+    padding:10px 12px;
+    position:relative;
+  }
+  .pr.high{background:rgba(224,92,58,0.08);border-color:rgba(224,92,58,0.3)}
+  .pr-num{font-size:9px;color:#4a6b5c;font-family:-apple-system,sans-serif}
+  .pr-title{font-size:11px;color:#e05c3a;font-weight:600;font-family:-apple-system,sans-serif;margin:2px 0;line-height:1.15}
+  .pr-tests{font-size:18px;font-weight:700;color:#3a8c6e;font-family:-apple-system,sans-serif}
+
+  /* Bar chart */
+  .bar-wrap{margin-bottom:20px}
+  .bar-row{display:flex;align-items:center;gap:4px;margin-bottom:3px}
+  .bar-label{width:40px;text-align:right;font-size:8px;color:#4a6b5c;font-family:-apple-system,sans-serif}
+  .bar-fill{height:14px;background:#e05c3a;min-width:2px;transition:width .3s;opacity:0.85}
+  .bar-fill:hover{opacity:1}
+  .bar-val{font-size:9px;color:#ffe6cb;margin-left:4px;font-family:-apple-system,sans-serif}
+
+  /* Totals row */
+  .totals{
+    display:flex;
+    justify-content:space-around;
+    border:1px solid rgba(74,107,92,0.3);
+    padding:18px 30px;
+    margin-bottom:16px;
+    background:rgba(17,46,36,0.7);
+  }
+  .tot-val{
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:28px;
+    font-weight:700;
+    color:#3a8c6e;
+  }
+  .tot-label{font-size:9px;color:rgba(255,230,203,0.4);letter-spacing:1px;text-transform:uppercase;font-family:-apple-system,sans-serif}
+
+  /* Leak summary */
+  .leaks{
+    text-align:center;
+    font-size:10px;
+    color:#4a6b5c;
+    margin-bottom:12px;
+    letter-spacing:1px;
+    font-family:-apple-system,sans-serif;
+  }
+  .leaks b{color:#e05c3a}
+
+  .principle{
+    text-align:center;
+    font-size:9px;
+    color:rgba(224,92,58,0.4);
+    font-style:italic;
+    border-top:1px solid rgba(74,107,92,0.2);
+    padding-top:12px;
+    letter-spacing:0.5px;
+    text-transform:uppercase;
+  }
+
+  /* Scanline effect */
+  .scanlines{
+    position:fixed;
+    top:0;left:0;right:0;bottom:0;
+    background:repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.02) 3px, rgba(0,0,0,0.02) 4px);
+    pointer-events:none;
+    z-index:2;
+  }
+</style>
+</head>
+<body>
+<div class="scanlines"></div>
+<div class="nous-mark">NOUS</div>
+<div class="content">
+
+<h1>hermes-tor</h1>
+<div class="sub">HARDENING BATTERY · 19 PULL REQUESTS</div>
+
+<div class="hero">
+  <div class="hero-num">1,240</div>
+  <div class="hero-label">Cumulative Test Functions</div>
+  <div class="hero-sub">Across 19 PR merge points · Current: 74 functions / 102 parametrized cases</div>
+</div>
+
+<!-- Bar chart: 19 PRs -->
+<div class="bar-wrap">
+  <div class="bar-row"><div class="bar-label">#1</div><div class="bar-fill" style="width:39px"></div><div class="bar-val">31</div></div>
+  <div class="bar-row"><div class="bar-label">#2</div><div class="bar-fill" style="width:56px"></div><div class="bar-val">45</div></div>
+  <div class="bar-row"><div class="bar-label">#3</div><div class="bar-fill" style="width:64px"></div><div class="bar-val">51</div></div>
+  <div class="bar-row"><div class="bar-label">#4</div><div class="bar-fill" style="width:36px"></div><div class="bar-val">29</div></div>
+  <div class="bar-row"><div class="bar-label">#5</div><div class="bar-fill" style="width:74px"></div><div class="bar-val">59</div></div>
+  <div class="bar-row"><div class="bar-label">#6</div><div class="bar-fill" style="width:70px"></div><div class="bar-val">56</div></div>
+  <div class="bar-row"><div class="bar-label">#7</div><div class="bar-fill" style="width:85px"></div><div class="bar-val">68</div></div>
+  <div class="bar-row"><div class="bar-label">#8</div><div class="bar-fill" style="width:94px"></div><div class="bar-val">75</div></div>
+  <div class="bar-row"><div class="bar-label">#9</div><div class="bar-fill" style="width:98px"></div><div class="bar-val">78</div></div>
+  <div class="bar-row"><div class="bar-label">#10</div><div class="bar-fill" style="width:94px"></div><div class="bar-val">75</div></div>
+  <div class="bar-row"><div class="bar-label">#11</div><div class="bar-fill" style="width:91px"></div><div class="bar-val">73</div></div>
+  <div class="bar-row"><div class="bar-label">#12</div><div class="bar-fill" style="width:95px"></div><div class="bar-val">76</div></div>
+  <div class="bar-row"><div class="bar-label">#13</div><div class="bar-fill" style="width:99px"></div><div class="bar-val">79</div></div>
+  <div class="bar-row"><div class="bar-label">#14</div><div class="bar-fill" style="width:100px;background:#e05c3a"></div><div class="bar-val">80 ★</div></div>
+  <div class="bar-row"><div class="bar-label">#15</div><div class="bar-fill" style="width:91px"></div><div class="bar-val">73</div></div>
+  <div class="bar-row"><div class="bar-label">#16</div><div class="bar-fill" style="width:93px"></div><div class="bar-val">74</div></div>
+  <div class="bar-row"><div class="bar-label">#17</div><div class="bar-fill" style="width:85px"></div><div class="bar-val">68</div></div>
+  <div class="bar-row"><div class="bar-label">#18</div><div class="bar-fill" style="width:94px"></div><div class="bar-val">75</div></div>
+  <div class="bar-row"><div class="bar-label">#19</div><div class="bar-fill" style="width:94px"></div><div class="bar-val">75</div></div>
+</div>
+
+<!-- PR cards grid -->
+<div class="grid">
+  <div class="pr"><div class="pr-num">PR #1</div><div class="pr-title">Fail-Closed HTTP</div><div class="pr-tests">31</div></div>
+  <div class="pr"><div class="pr-num">PR #2</div><div class="pr-title">Network Policy</div><div class="pr-tests">45</div></div>
+  <div class="pr"><div class="pr-num">PR #3</div><div class="pr-title">Compat Manifest</div><div class="pr-tests">51</div></div>
+  <div class="pr"><div class="pr-num">PR #4</div><div class="pr-title">LLM Routing</div><div class="pr-tests">29</div></div>
+  <div class="pr"><div class="pr-num">PR #5</div><div class="pr-title">Bridge Parsing</div><div class="pr-tests">59</div></div>
+  <div class="pr"><div class="pr-num">PR #6</div><div class="pr-title">Auth Downloads</div><div class="pr-tests">56</div></div>
+  <div class="pr"><div class="pr-num">PR #7</div><div class="pr-title">Atomic Extract</div><div class="pr-tests">68</div></div>
+  <div class="pr high"><div class="pr-num">PR #8</div><div class="pr-title">SOCKS Isolation</div><div class="pr-tests">75</div></div>
+  <div class="pr high"><div class="pr-num">PR #9</div><div class="pr-title">Control Auth</div><div class="pr-tests">78</div></div>
+  <div class="pr"><div class="pr-num">PR #10</div><div class="pr-title">Proxy Policy</div><div class="pr-tests">75</div></div>
+  <div class="pr"><div class="pr-num">PR #11</div><div class="pr-title">Layered Verify</div><div class="pr-tests">73</div></div>
+  <div class="pr"><div class="pr-num">PR #12</div><div class="pr-title">Secure Files</div><div class="pr-tests">76</div></div>
+  <div class="pr"><div class="pr-num">PR #13</div><div class="pr-title">Redaction</div><div class="pr-tests">79</div></div>
+  <div class="pr high"><div class="pr-num">PR #14</div><div class="pr-title">Bridge Rotation</div><div class="pr-tests">80</div></div>
+  <div class="pr"><div class="pr-num">PR #15</div><div class="pr-title">Proxy HTTP</div><div class="pr-tests">73</div></div>
+  <div class="pr"><div class="pr-num">PR #16</div><div class="pr-title">SOCKS Fail-Closed</div><div class="pr-tests">74</div></div>
+  <div class="pr"><div class="pr-num">PR #17</div><div class="pr-title">Restore PR#6</div><div class="pr-tests">68</div></div>
+  <div class="pr"><div class="pr-num">PR #18</div><div class="pr-title">Fix All Tests</div><div class="pr-tests">75</div></div>
+  <div class="pr"><div class="pr-num">PR #19</div><div class="pr-title">Merge-Chain Fix</div><div class="pr-tests">75</div></div>
+</div>
+
+<div class="totals">
+  <div><div class="tot-val">1,240</div><div class="tot-label">Cumulative</div></div>
+  <div><div class="tot-val">74</div><div class="tot-label">Current Fns</div></div>
+  <div><div class="tot-val">102</div><div class="tot-label">Cases</div></div>
+  <div><div class="tot-val">80</div><div class="tot-label">Peak</div></div>
+  <div><div class="tot-val">19</div><div class="tot-label">PRs</div></div>
+</div>
+
+<div class="leaks">
+  <b>15</b> LEAKS FIXED &nbsp;·&nbsp; <b>1</b> MITIGATED (Photon) &nbsp;·&nbsp; <b>1</b> DOCUMENTED (latency)
+</div>
+
+<div class="principle">
+  Incremental hardening over current build · Every step additive · Failures contained, not cascaded<br>
+  If one channel has a tiny leak, don't cascade it into a full system break
+</div>
+
+</div>
+</body>
+</html>

@@ -11,16 +11,22 @@ Key design decisions:
     because select.select() only works on sockets on Windows.
   - Process management uses terminate() on Windows, SIGINT on Linux.
 """
-import logging
 import os
 import queue
+import secrets
 import shlex
 import signal
 import subprocess
+from hermes_tor.policy import NetworkChannel, authorize
 import threading
 import time
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
+from urllib.parse import quote
+
+import httpx
 
 from hermes_tor.constants import (
     DEFAULT_SOCKS_PORT,
@@ -31,8 +37,19 @@ from hermes_tor.constants import (
     get_geoip_paths,
 )
 from hermes_tor.bridges import Bridge
+from hermes_tor.secure_files import atomic_private_write, private_lock
 
-logger = logging.getLogger(__name__)
+from hermes_tor.privacy import get_logger
+
+logger = get_logger(__name__)
+
+
+def authenticated_socks_proxy_url(socks_port: int = DEFAULT_SOCKS_PORT) -> str:
+    """Return a fresh SOCKS URL whose authentication isolates its streams."""
+    username = quote(secrets.token_urlsafe(24), safe="")
+    password = quote(secrets.token_urlsafe(32), safe="")
+    return f"socks5://{username}:{password}@127.0.0.1:{socks_port}"
+
 
 # Template with absolute paths filled at generation time.
 # No ${pt_path} — we resolve paths ourselves.
@@ -40,13 +57,16 @@ TORRC_TEMPLATE = """\
 # hermes-tor generated torrc — {generated_at}
 # DO NOT EDIT MANUALLY — regenerated on each start.
 
-SOCKSPort {socks_port}
-ControlPort {control_port}
+# Bind locally and use SOCKS credentials as Tor circuit-isolation tokens.
+SOCKSPort 127.0.0.1:{socks_port} IsolateSOCKSAuth
+{control_endpoint}
 DataDirectory {data_dir}
 Log notice stdout
 RunAsDaemon 0
 AvoidDiskWrites 1
-CookieAuthentication 0
+CookieAuthentication 1
+CookieAuthFile {cookie_path}
+CookieAuthFileGroupReadable 0
 GeoIPFile {geoip_path}
 GeoIPv6File {geoip6_path}
 
@@ -60,6 +80,46 @@ GeoIPv6File {geoip6_path}
 
 class TorDaemonError(Exception):
     """Raised when Tor daemon operations fail."""
+
+
+@dataclass(frozen=True)
+class IsolationIdentity:
+    """Boundaries which must not be linkable through a SOCKS circuit."""
+
+    conversation_id: str
+    agent_id: str
+    subagent_id: str | None = None
+    platform_account: str | None = None
+    browser_context: str | None = None
+    sensitive_task: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.conversation_id.strip() or not self.agent_id.strip():
+            raise ValueError("conversation_id and agent_id are required for SOCKS isolation")
+
+
+class SocksCredential:
+    """A single-use SOCKS authentication lease with best-effort zeroization."""
+
+    def __init__(self, identity: IsolationIdentity):
+        self.identity = identity
+        self._username = bytearray(secrets.token_urlsafe(24), "ascii")
+        self._password = bytearray(secrets.token_urlsafe(32), "ascii")
+        self._discarded = False
+
+    def authentication(self) -> tuple[str, str]:
+        if self._discarded:
+            raise TorDaemonError("SOCKS credential has already been discarded")
+        return self._username.decode("ascii"), self._password.decode("ascii")
+
+    def discard(self) -> None:
+        for secret in (self._username, self._password):
+            secret[:] = b"\x00" * len(secret)
+        self._discarded = True
+
+    @property
+    def discarded(self) -> bool:
+        return self._discarded
 
 
 class TorDaemon:
@@ -86,7 +146,11 @@ class TorDaemon:
 
         self._process: Optional[subprocess.Popen] = None
         self._torrc_path = self.data_dir / "torrc"
+        self.control_socket_path = self.data_dir / "control.sock"
+        self.cookie_path = self.data_dir / "control_auth_cookie"
         self._start_time: Optional[float] = None
+        self._credential_lock = threading.Lock()
+        self._active_credentials: set[SocksCredential] = set()
 
     # ── Public API ─────────────────────────────────────────────
 
@@ -96,7 +160,50 @@ class TorDaemon:
 
     @property
     def socks_proxy_url(self) -> str:
+        """Return the listener address; do not export it as ``ALL_PROXY``."""
         return f"socks5://127.0.0.1:{self.socks_port}"
+
+    def issue_socks_credential(self, identity: IsolationIdentity) -> SocksCredential:
+        """Issue a fresh, non-reusable credential for one isolation boundary."""
+        if not isinstance(identity, IsolationIdentity):
+            raise TorDaemonError("an explicit IsolationIdentity is required")
+        credential = SocksCredential(identity)
+        with self._credential_lock:
+            self._active_credentials.add(credential)
+        return credential
+
+    def discard_socks_credential(self, credential: SocksCredential) -> None:
+        """Revoke a credential lease and erase its locally held secret bytes."""
+        with self._credential_lock:
+            if credential not in self._active_credentials:
+                raise TorDaemonError("SOCKS credential is not active")
+            self._active_credentials.remove(credential)
+        credential.discard()
+
+    @contextmanager
+    def isolated_client(
+        self, identity: IsolationIdentity | None, **client_kwargs
+    ) -> Iterator[httpx.Client]:
+        """Yield a request-scoped client, then close it and discard its identity.
+
+        Every entry creates random credentials, including repeated entries for
+        the same identity.  ``trust_env=False`` prevents environment-wide proxy
+        configuration from replacing or bypassing the isolation session.
+        """
+        if identity is None:
+            raise TorDaemonError("anonymous SOCKS clients are forbidden; assign an identity")
+        controlled_options = {"proxy", "trust_env", "mounts"}.intersection(client_kwargs)
+        if controlled_options:
+            names = ", ".join(sorted(controlled_options))
+            raise TorDaemonError(f"isolated clients control routing settings: {names}")
+        credential = self.issue_socks_credential(identity)
+        username, password = credential.authentication()
+        proxy = f"socks5://{username}:{password}@127.0.0.1:{self.socks_port}"
+        try:
+            with httpx.Client(proxy=proxy, trust_env=False, **client_kwargs) as client:
+                yield client
+        finally:
+            self.discard_socks_credential(credential)
 
     @property
     def uptime_seconds(self) -> float | None:
@@ -117,8 +224,9 @@ class TorDaemon:
         self._verify_prerequisites()
 
         cmd = [str(self.tor_binary), "-f", str(self._torrc_path)]
-        logger.info("Starting Tor: %s", shlex.join(cmd))
+        logger.info("Starting Tor with redacted command arguments")
 
+        authorize(NetworkChannel.TOR_BOOTSTRAP)
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -166,11 +274,8 @@ class TorDaemon:
                             remaining.append(line_queue.get_nowait())
                         except queue.Empty:
                             break
-                    full_output = "".join(l for l in remaining if l)
                     raise TorDaemonError(
-                        f"Tor exited prematurely (code {self._process.returncode}).\n"
-                        f"Last log line: {last_line}\n"
-                        f"Full output:\n{full_output[-2000:]}"
+                        f"Tor exited prematurely (code {self._process.returncode})."
                     )
 
                 # Non-blocking read from queue
@@ -180,7 +285,7 @@ class TorDaemon:
                         break
                     line = line.rstrip()
                     if line:
-                        logger.debug("Tor: %s", line)
+                        logger.debug("Tor log event received")
                         last_line = line
                         if "Bootstrapped 100%" in line:
                             bootstrapped = True
@@ -194,11 +299,8 @@ class TorDaemon:
         if not bootstrapped:
             self.stop()
             raise TorDaemonError(
-                f"Tor failed to bootstrap within {timeout}s.\n"
-                f"Last line: {last_line}\n"
-                f"Bridges configured: {len(self.bridges)}\n"
-                f"Check that your bridges are valid and not blocked.\n"
-                f"Get fresh bridges from @GetBridgesBot on Telegram."
+                f"Tor failed to bootstrap within {timeout}s; "
+                "check connectivity or replace the bridge configuration."
             )
 
         logger.info(
@@ -208,9 +310,15 @@ class TorDaemon:
             self.uptime_seconds,
         )
 
+        # Tor normally creates this as 0600.  Enforce that invariant rather
+        # than relying on the process umask, since it grants control of Tor.
+        if self.cookie_path.exists():
+            self.cookie_path.chmod(0o600)
+
     def stop(self, timeout: float = 10.0) -> None:
         """Stop the Tor daemon gracefully."""
         if not self._process:
+            self._discard_all_credentials()
             return
 
         pid = self._process.pid
@@ -232,20 +340,70 @@ class TorDaemon:
 
         self._process = None
         self._start_time = None
+        self._discard_all_credentials()
         logger.info("Tor daemon stopped")
 
     def health_check(self) -> bool:
-        """Check if SOCKS5 port is accepting connections."""
+        """Complete SOCKS5 method negotiation with the managed daemon."""
         if not self.is_running:
             return False
 
+        authorize(NetworkChannel.TOR_CONTROL, local_only=True)
         import socket
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(2)
-            result = sock.connect_ex(("127.0.0.1", self.socks_port))
+            sock.connect(("127.0.0.1", self.socks_port))
+            sock.sendall(b"\x05\x01\x00")
+            result = sock.recv(2) == b"\x05\x00"
             sock.close()
-            return result == 0
+            return result
+        except Exception:
+            return False
+
+    def process_health(self) -> bool:
+        """Verify this object still owns the exact live Tor subprocess."""
+        if not self.is_running or self._process is None or self._process.pid <= 0:
+            return False
+        if os.name != "nt":
+            try:
+                return Path(f"/proc/{self._process.pid}/exe").resolve() == self.tor_binary.resolve()
+            except OSError:
+                return False
+        return True
+
+    def bootstrap_status(self) -> tuple[int | None, str | None]:
+        """Read authenticated bootstrap progress from Tor's ControlPort."""
+        if not self.process_health():
+            return None, "managed Tor process is not healthy"
+        try:
+            import re
+            import socket
+            cookie = (self.data_dir / "control_auth_cookie").read_bytes().hex().encode()
+            with socket.create_connection(("127.0.0.1", self.control_port), timeout=3) as sock:
+                sock.sendall(b"AUTHENTICATE " + cookie + b"\r\n")
+                if not sock.recv(1024).startswith(b"250"):
+                    return None, "control authentication failed"
+                sock.sendall(b"GETINFO status/bootstrap-phase\r\nQUIT\r\n")
+                response = sock.recv(4096).decode("utf-8", "replace")
+            match = re.search(r"PROGRESS=(\d+)", response)
+            return (int(match.group(1)), None) if match else (None, "missing bootstrap progress")
+        except Exception as exc:
+            return None, str(exc)
+
+    def signal_newnym(self) -> bool:
+        """Authenticate to the owned daemon and request fresh circuits."""
+        if not self.process_health():
+            return False
+        try:
+            import socket
+            cookie = (self.data_dir / "control_auth_cookie").read_bytes().hex().encode()
+            with socket.create_connection(("127.0.0.1", self.control_port), timeout=5) as sock:
+                sock.sendall(b"AUTHENTICATE " + cookie + b"\r\n")
+                if not sock.recv(1024).startswith(b"250"):
+                    return False
+                sock.sendall(b"SIGNAL NEWNYM\r\n")
+                return sock.recv(1024).startswith(b"250")
         except Exception:
             return False
 
@@ -260,6 +418,14 @@ class TorDaemon:
         return False
 
     # ── Internals ──────────────────────────────────────────────
+
+    def _discard_all_credentials(self) -> None:
+        """Discard every outstanding lease during daemon shutdown."""
+        with self._credential_lock:
+            credentials = tuple(self._active_credentials)
+            self._active_credentials.clear()
+        for credential in credentials:
+            credential.discard()
 
     def _verify_prerequisites(self):
         """Check that required files exist before starting Tor."""
@@ -300,11 +466,19 @@ class TorDaemon:
                 "# and restart. Get bridges from @GetBridgesBot on Telegram."
             )
 
+        if os.name == "nt":
+            # Never expose the control transport beyond this host.
+            control_endpoint = f"ControlPort 127.0.0.1:{self.control_port}"
+        else:
+            # Avoid a TCP listener altogether where Tor supports Unix sockets.
+            control_endpoint = f'ControlSocket "{self.control_socket_path}"'
+
         return TORRC_TEMPLATE.format(
             generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             socks_port=self.socks_port,
-            control_port=self.control_port,
+            control_endpoint=control_endpoint,
             data_dir=self.data_dir,
+            cookie_path=self.cookie_path,
             geoip_path=geoip_path,
             geoip6_path=geoip6_path,
             transport_plugins=transport_plugins,
@@ -312,8 +486,10 @@ class TorDaemon:
         )
 
     def _write_torrc(self):
-        """Write torrc to disk."""
-        self.data_dir.mkdir(parents=True, exist_ok=True)
+        """Write torrc to disk with secure permissions."""
+        from hermes_tor.secure_files import private_lock, atomic_private_write
+
         torrc_content = self._build_torrc()
-        self._torrc_path.write_text(torrc_content)
+        with private_lock(self._torrc_path):
+            atomic_private_write(self._torrc_path, torrc_content)
         logger.debug("torrc written (%d bytes) to %s", len(torrc_content), self._torrc_path)

@@ -11,12 +11,17 @@ Leaks are categorized:
 Run: python -m hermes_tor.hardening audit
 """
 
+import hashlib
+import json
 import logging
 import os
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from pathlib import Path
+from importlib.resources import files
+from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +49,43 @@ class Leak:
     after: str
     verification: str
     component: str
+
+
+class ControlStatus(Enum):
+    UNVERIFIED = "unverified"
+    PATCH_ONLY = "patch_only"
+    MITIGATED = "mitigated"
+    VERIFIED = "verified"
+    INCOMPATIBLE = "incompatible"
+
+
+class EvidenceKind(Enum):
+    DOCUMENTATION = "documentation"
+    PATCH_ARTIFACT = "patch_artifact"
+    INSTALLED_PATCH = "installed_patch"
+    RUNTIME_VERIFICATION = "runtime_verification"
+
+
+@dataclass(frozen=True)
+class Control:
+    id: str
+    title: str
+    files: tuple[str, ...]
+    hermes_revision: str
+    patch_id: str
+    documentation_only: bool = False
+
+
+@dataclass(frozen=True)
+class ControlResult:
+    control: Control
+    status: ControlStatus
+    evidence: EvidenceKind
+    detail: str
+
+
+class CompatibilityError(RuntimeError):
+    """The installed Hermes tree is not the versioned, patched integration."""
 
 
 LEAKS: list[Leak] = []
@@ -295,11 +337,11 @@ register(
     "Documented mitigation: route LLM calls through VPN-only (bypass Tor) while "
     "keeping all other traffic through Tor. The LLM API key already identifies "
     "your account — Tor adds IP privacy but not account anonymity for API calls. "
-    "Set TOR_SKIP_LLM=1 to route LLM calls direct (or through VPN) while "
-    "everything else goes through Tor. For truly anonymous LLM access, use "
+    "Non-strict deployments may use a request-scoped client only when an explicit "
+    "per-provider policy allows direct routing. For truly anonymous LLM access, use "
     "providers that don't block Tor (local models, some open-source endpoints) "
     "or route through a non-exit-node SOCKS5 proxy chain.",
-    "Verify: attempt an API call through Tor — if blocked, enable TOR_SKIP_LLM=1",
+    "Verify: direct routing is rejected unless the provider policy opts in",
     "hermes_tor/gateway.py, SKILL.md"
 )
 
@@ -335,13 +377,148 @@ register(
     "For latency-sensitive workloads (streaming chat, real-time voice), "
     "consider VPN-only routing. For batch workloads (subagent research, "
     "scheduled tasks, data extraction), Tor overhead is negligible. "
-    "TOR_SKIP_LLM=1 routes LLM streaming through VPN-only to preserve TTFT.",
+    "A policy-approved request-scoped direct client can preserve TTFT in non-strict mode.",
     "Measure: compare TTFT with and without Tor using the same provider/model",
     "All network paths (documentation)"
 )
 
 
 # ═══════════════════════════════════════════════════════════════
+def load_manifest() -> dict:
+    path = files("hermes_tor").joinpath("compatibility-manifest.json")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _controls(manifest: dict) -> list[Control]:
+    revision = manifest["upstream"]["required_commit"]
+    return [
+        Control(item["id"], item["title"], tuple(item.get("files", ())),
+                revision, item["patch_id"], item.get("documentation_only", False))
+        for item in manifest["controls"]
+    ]
+
+
+def find_hermes_root(explicit: Path | str | None = None) -> Path | None:
+    """Find Hermes without treating the hermes-tor repository as Hermes."""
+    candidates = [explicit, os.environ.get("HERMES_HOME"), Path.cwd()]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        root = Path(candidate).expanduser().resolve()
+        if (root / "gateway/platforms/base.py").is_file() and (root / "plugins").is_dir():
+            return root
+    return None
+
+
+def _git_revision(root: Path) -> str | None:
+    try:
+        return subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def verify_compatibility(
+    hermes_root: Path | str | None = None,
+    *,
+    strict: bool | None = None,
+    runtime_probes: dict[str, Callable[[], bool]] | None = None,
+) -> list[ControlResult]:
+    """Compare the installed Hermes revision and files to the signed-off manifest.
+
+    A matching file set is MITIGATED, not VERIFIED.  VERIFIED requires a named
+    runtime probe from the embedding application; hermes-tor never infers network
+    behaviour from configuration alone.
+    """
+    manifest = load_manifest()
+    controls = _controls(manifest)
+    strict = is_strict_mode() if strict is None else strict
+    root = find_hermes_root(hermes_root)
+    patch_path = Path(__file__).resolve().parents[2] / manifest["patch"]["path"]
+    patch_ok = patch_path.is_file() and _sha256(patch_path) == manifest["patch"]["sha256"]
+    revision = _git_revision(root) if root else None
+    revision_ok = revision == manifest["upstream"]["required_commit"]
+    expected = manifest["patched_files"]
+    results: list[ControlResult] = []
+
+    for control in controls:
+        if control.documentation_only:
+            result = ControlResult(control, ControlStatus.UNVERIFIED,
+                                   EvidenceKind.DOCUMENTATION,
+                                   "limitation documented; no enforcement is claimed")
+            probe = (runtime_probes or {}).get(control.id)
+            if probe is not None:
+                try:
+                    passed = probe() is True
+                except Exception as exc:
+                    result = ControlResult(control, ControlStatus.INCOMPATIBLE,
+                                           EvidenceKind.RUNTIME_VERIFICATION,
+                                           f"runtime probe failed: {exc}")
+                else:
+                    if passed:
+                        result = ControlResult(
+                            control, ControlStatus.VERIFIED,
+                            EvidenceKind.RUNTIME_VERIFICATION,
+                            "caller-supplied runtime probe confirmed the unsafe feature is disabled")
+                    else:
+                        result = ControlResult(control, ControlStatus.INCOMPATIBLE,
+                                               EvidenceKind.RUNTIME_VERIFICATION,
+                                               "caller-supplied runtime probe reported failure")
+        elif root is None or not revision_ok:
+            detail = "Hermes installation not found" if root is None else (
+                f"Hermes revision {revision or 'unknown'} != required {control.hermes_revision}")
+            result = ControlResult(
+                control, ControlStatus.PATCH_ONLY if patch_ok else ControlStatus.UNVERIFIED,
+                EvidenceKind.PATCH_ARTIFACT if patch_ok else EvidenceKind.DOCUMENTATION, detail)
+        else:
+            bad = [name for name in control.files
+                   if not (root / name).is_file() or _sha256(root / name) != expected[name]]
+            if bad:
+                result = ControlResult(control, ControlStatus.PATCH_ONLY,
+                                       EvidenceKind.PATCH_ARTIFACT,
+                                       "missing or incompatible installed files: " + ", ".join(bad))
+            else:
+                result = ControlResult(control, ControlStatus.MITIGATED,
+                                       EvidenceKind.INSTALLED_PATCH,
+                                       "required revision and patched file hashes match")
+                probe = (runtime_probes or {}).get(control.id)
+                if probe is not None:
+                    try:
+                        passed = probe() is True
+                    except Exception as exc:
+                        result = ControlResult(control, ControlStatus.INCOMPATIBLE,
+                                               EvidenceKind.RUNTIME_VERIFICATION,
+                                               f"runtime probe failed: {exc}")
+                    else:
+                        if passed:
+                            result = ControlResult(control, ControlStatus.VERIFIED,
+                                                   EvidenceKind.RUNTIME_VERIFICATION,
+                                                   "caller-supplied runtime probe passed")
+                        else:
+                            result = ControlResult(control, ControlStatus.INCOMPATIBLE,
+                                                   EvidenceKind.RUNTIME_VERIFICATION,
+                                                   "caller-supplied runtime probe reported failure")
+
+        results.append(result)
+
+    incompatible = [r for r in results if r.status in (
+        ControlStatus.UNVERIFIED, ControlStatus.PATCH_ONLY, ControlStatus.INCOMPATIBLE)]
+    if strict and incompatible:
+        summary = "; ".join(f"{r.control.id}: {r.detail}" for r in incompatible)
+        raise CompatibilityError(f"strict mode rejected incompatible Hermes integration: {summary}")
+    return results
+
+
 # Hardening Tools
 # ═══════════════════════════════════════════════════════════════
 

@@ -18,6 +18,26 @@ TOR_PLATFORM_MAP = {
     "linux": "linux",
 }
 
+# Tor Browser release signing key.  The key itself is shipped in
+# ``hermes_tor/keys/tor-browser-developers.asc``; accepting a key obtained at
+# download time would merely move trust to the network.
+TOR_RELEASE_SIGNING_FINGERPRINTS = frozenset({
+    "EF6E286DDA85EA2A4BA7DE684E2C6E8793298290",
+})
+TOR_RELEASE_SIGNING_KEY = Path(__file__).with_name("keys") / "tor-browser-developers.asc"
+
+# Every artifact we advertise has an explicitly associated piece of signed
+# metadata. Tor publishes detached OpenPGP signatures alongside expert bundles.
+TOR_PLATFORM_ARTIFACTS = {
+    ("windows", "x86_64"): "tor-expert-bundle-windows-x86_64-{version}.tar.gz",
+    ("linux", "x86_64"): "tor-expert-bundle-linux-x86_64-{version}.tar.gz",
+    ("linux", "aarch64"): "tor-expert-bundle-linux-aarch64-{version}.tar.gz",
+}
+TOR_PLATFORM_SIGNATURES = {
+    platform_artifact: artifact + ".asc"
+    for platform_artifact, artifact in TOR_PLATFORM_ARTIFACTS.items()
+}
+
 TOR_ARCH_MAP = {
     "amd64": "x86_64",
     "x86_64": "x86_64",
@@ -107,7 +127,21 @@ def get_download_url() -> str:
             f"Unsupported platform: {CURRENT_PLATFORM}/{CURRENT_ARCH}. "
             f"Available: windows/x86_64, linux/x86_64, linux/aarch64"
         )
-    filename = f"tor-expert-bundle-{plat}-{arch}-{TOR_VERSION}.tar.gz"
+    template = TOR_PLATFORM_ARTIFACTS.get((plat, arch))
+    if template is None:
+        raise RuntimeError(f"No signed Tor artifact for {plat}/{arch}")
+    filename = template.format(version=TOR_VERSION)
+    return f"{TOR_BASE_URL}/{TOR_VERSION}/{filename}"
+
+
+def get_signature_url() -> str:
+    """Return the detached OpenPGP signature location for this artifact."""
+    plat = TOR_PLATFORM_MAP.get(CURRENT_PLATFORM)
+    arch = TOR_ARCH_MAP.get(CURRENT_ARCH)
+    template = TOR_PLATFORM_SIGNATURES.get((plat, arch))
+    if template is None:
+        raise RuntimeError(f"No signed Tor metadata for {plat}/{arch}")
+    filename = template.format(version=TOR_VERSION)
     return f"{TOR_BASE_URL}/{TOR_VERSION}/{filename}"
 
 

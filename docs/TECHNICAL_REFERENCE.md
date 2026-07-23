@@ -31,7 +31,7 @@ If you're going to build agents that the balkanizers can't touch, you need to kn
 **Version:** 0.1.0  
 **Tor Expert Bundle:** 15.0.19  
 **Threat Model:** Nation-state ISP censorship, AI provider access restriction, traffic correlation attacks  
-**Security Posture:** Fail-closed. 17 leaks audited. 9 fixed at the transport layer. 7 documented with mitigations.
+**Security Posture:** Fail-closed. 17 leaks audited. 15 fixed at transport/policy layer. 1 mitigated (Photon — depends on Go binary). 1 documented (latency — inherent to onion routing, not a code fix). All hardening always-on — no strict mode toggle. Incremental over current build, failures contained not cascaded.
 
 ---
 
@@ -40,6 +40,18 @@ If you're going to build agents that the balkanizers can't touch, you need to kn
 1. [Threat Model & Cryptographic Foundation](#1-threat-model--cryptographic-foundation)
 2. [Transport Architecture](#2-transport-architecture)
 3. [Module Reference](#3-module-reference)
+   - [3.1 constants.py](#31-constantspy--platform-detection--path-resolution)
+   - [3.2 downloader.py](#32-downloaderpy--tor-expert-bundle-acquisition)
+   - [3.3 bridges.py](#33-bridgespy--bridge-parser--validator)
+   - [3.4 daemon.py](#34-daemonpy--tor-subprocess-manager)
+   - [3.5 proxy_http.py](#35-proxy_httppy--socks5-aware-http-helpers)
+   - [3.6 verifier.py](#36-verifierpy--tls-validating-route-verification)
+   - [3.7 manager.py](#37-managerpy--unified-tormanager-api)
+   - [3.8 mcp_server.py](#38-mcp_serverpy--hermes-mcp-integration)
+   - [3.9 gateway.py](#39-gatewaypy--gateway-integration)
+   - [3.10 hardening.py](#310-hardeningpy--adversarial-audit)
+   - [3.11 privacy.py](#311-privacypy--centralized-redaction--error-classification)
+   - [3.12 secure_files.py](#312-secure_filespy--race-resistant-private-file-operations)
 4. [Proxy Resolution Chain](#4-proxy-resolution-chain)
 5. [Adversarial Hardening Audit](#5-adversarial-hardening-audit)
 6. [Self-Healing Topology](#6-self-healing-topology)
@@ -58,7 +70,7 @@ We model three classes of adversary, following the taxonomy established by Dingl
 | Adversary | Capability | Goal | Tor Mitigation |
 |-----------|-----------|------|----------------|
 | **ISP-level (Class A)** | Full packet inspection, DPI, IP blocking, traffic shaping | Identify and block AI API traffic; enforce government AI access restrictions | [obfs4 bridges](https://github.com/Yawning/obfs4/blob/master/doc/obfs4-spec.txt) make Tor traffic indistinguishable from random noise (§4.2). ISP cannot determine that the user is connecting to an AI provider. |
-| **Provider-level (Class B)** | API key identification, IP-based blocking of Tor exit nodes, CAPTCHA gating | Prevent anonymous access to AI models; enforce KYC via payment methods | VPN → Tor layering hides real IP. `TOR_SKIP_LLM=1` bypasses exit node blocking for API-authenticated calls. Provider sees VPN IP, not user IP. |
+| **Provider-level (Class B)** | API key identification, IP-based blocking of Tor exit nodes, CAPTCHA gating | Prevent anonymous access to AI models; enforce KYC via payment methods | Strict mode requires Tor. Non-strict mode requires explicit per-provider opt-in for a request-scoped direct transport. |
 | **Correlation (Class C)** | Traffic timing analysis across multiple network vantage points | Link user identity to agent activity by correlating traffic patterns | Circuit rotation every 10 minutes via [NEWNYM signal](https://github.com/torproject/torspec/blob/main/control-spec.txt) (§3.2). Self-healing watchdog prevents long-lived circuit fingerprinting. |
 
 ### 1.2 Cryptographic Stack
@@ -154,7 +166,7 @@ HTTP proxies ([RFC 7230](https://datatracker.ietf.org/doc/html/rfc7230) §2.3) o
 Two Python libraries implement the SOCKS5 protocol for HTTP libraries:
 
 **httpx + socksio:**
-The [httpx](https://www.python-httpx.org/) library (v0.28.1, already in Hermes venv) supports SOCKS5 via the `proxy` parameter on `HTTPTransport` and `AsyncHTTPTransport`. Internally, httpx delegates to [socksio](https://github.com/sethmlarson/socksio) (v1.0.0, already in Hermes venv) — a sans-I/O implementation of SOCKS4, SOCKS4a, and SOCKS5. Source: `httpx._transports.AsyncHTTPTransport.__init__` accepts `proxy: str | None`.
+The supported dependency matrix is Python `>=3.11`, `httpx[socks]>=0.28,<0.29`, and the `socksio==1.*` backend selected by that extra. The packaging smoke test currently validates HTTPX 0.28.1 with socksio 1.0.0. Plain `httpx` is **not** supported because it does not install the optional SOCKS backend. Both `HTTPTransport` and `AsyncHTTPTransport` are constructed locally at Tor startup, without issuing a request. If either construction fails, startup reports the stable `SOCKS transport unavailable` error and stops; no direct fallback is attempted. Internally, httpx delegates SOCKS negotiation to [socksio](https://github.com/sethmlarson/socksio), a sans-I/O implementation of SOCKS4, SOCKS4a, and SOCKS5.
 
 Usage:
 ```python
@@ -296,11 +308,11 @@ Hits `https://check.torproject.org/` through the SOCKS5 proxy. The response pars
 - "Congratulations. This browser is configured to use Tor." → `using_tor=True`
 - "Sorry. You are not using Tor." → `using_tor=False`
 
-### 3.6 `verifier.py` — Anonymity Verification
+### 3.6 `verifier.py` — TLS-Validating Route Verification
 
 **Source:** [`src/hermes_tor/verifier.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/verifier.py)
 
-Three regexes parse the check.torproject.org response. Both sync and async versions provided. Async version uses `httpx.AsyncClient` with `httpx.AsyncHTTPTransport(proxy=...)` — the mirror of the sync implementation.
+Uses Tor's structured HTTPS JSON API (`check.torproject.org/api/ip`) plus an independent observer (`api.ipify.org`) to cross-validate exit IPs. TLS certificate/hostname validation enabled (no redirects followed). The `verify()` method requires Tor's `IsTor: true` assertion AND matching exit IPs from both endpoints. `verify_async()` delegates to `verify()` via `asyncio.to_thread`. All response parsing is JSON-based — no HTML regex parsing.
 
 ### 3.7 `manager.py` — Unified TorManager API
 
@@ -335,7 +347,7 @@ An agent can call `mcp_hermes-tor_verify` periodically. If `using_tor` is False 
 
 Hermes' gateway already checks `ALL_PROXY` in its centralized `resolve_proxy_url()` at `gateway/platforms/base.py` line 378. By setting `ALL_PROXY=socks5://127.0.0.1:9050` before gateway startup, every platform adapter routes through Tor — no adapter-level changes needed. This is the [facade pattern](https://en.wikipedia.org/wiki/Facade_pattern): one environment variable, 20+ adapters, zero adapter awareness of Tor.
 
-**`skip_llm_proxy()`:** Removes `ALL_PROXY`/`HTTPS_PROXY`/`HTTP_PROXY` from `os.environ` for LLM API calls. Based on the observed behavior that major LLM providers (OpenAI, Anthropic) block Tor exit nodes with HTTP 403 ([Cloudflare Bot Management](https://www.cloudflare.com/products/bot-management/)). Platform adapters still route through Tor via platform-specific vars set independently.
+**Request-scoped LLM routing:** `create_llm_client()` constructs an explicit httpx transport with environment discovery disabled. Strict mode prohibits direct routing. Non-strict direct routing requires a deliberate provider policy and emits a critical security audit event; global proxy variables are never changed.
 
 ### 3.10 `hardening.py` — Adversarial Audit
 
@@ -346,6 +358,38 @@ Hermes' gateway already checks `ALL_PROXY` in its centralized `resolve_proxy_url
 Traditional security documentation lists mitigations. This module makes the audit executable: `python -m hermes_tor.hardening audit` prints the full 17-leak table with severity, status, before/after states, verification methods, and affected components. The pattern is inspired by [STIG](https://public.cyber.mil/stigs/) (Security Technical Implementation Guide) compliance checklists, where each finding includes a check procedure.
 
 **TOR_STRICT_MODE:** Implements the [fail-closed principle](https://en.wikipedia.org/wiki/Fail-closed): features that cannot be secured are disabled rather than operating in a degraded security state. This is the same design principle used in [Tor Browser's security slider](https://tb-manual.torproject.org/security-settings/).
+
+### 3.11 `privacy.py` — Centralized Redaction & Error Classification
+
+**Source:** [`src/hermes_tor/privacy.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/privacy.py)
+
+**`redact(text)`**: Sanitizes URLs (strips credentials, query strings, fragments), file paths (replaces home directory with `[REDACTED HOME]`), and known token patterns from log output.
+
+**`RedactingFilter`**: A `logging.Filter` that applies `redact()` to every log record before handlers see it. Attached to the root logger, ensuring no sensitive data escapes through any log channel.
+
+**`get_logger(name)`**: Drop-in replacement for `logging.getLogger(name)` that returns a logger with the `RedactingFilter` pre-attached. All 7 hermes-tor modules route through this.
+
+**`classify_error(exc)`** → `PublicError`: Maps exceptions to stable, minimal public error codes and messages. Internal details (stack traces, local paths, network addresses) never leave the process via MCP or API responses.
+
+**`private_diagnostic(component, detail)`**: Writes sensitive diagnostics to an opt-in debug log (`HERMES_TOR_DEBUG=1` + `HERMES_TOR_DEBUG_LOG` path). Owner-only file permissions (0600).
+
+**`require_local_admin(token)`**: Token-based authorization for local administrative access to sensitive diagnostics. Tokens generated at startup and logged privately.
+
+### 3.12 `secure_files.py` — Race-Resistant Private File Operations
+
+**Source:** [`src/hermes_tor/secure_files.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py)
+
+**`private_directory(path)`**: Creates an owner-only directory tree (0700). Validates every existing component — rejects symlinks, unexpected file types, and files owned by another user. On Windows, applies owner-only ACLs via PowerShell SDDL replacement (best-effort).
+
+**`private_lock(destination)`** → context manager: Holds a process-wide advisory lock. Uses `fcntl.flock(LOCK_EX)` on POSIX, `msvcrt.locking(LK_LOCK)` on Windows. Lock file created with 0600 permissions in the same directory as the protected file.
+
+**`secure_read(path)`**: Reads a file after validating it is a regular file owned by the current user (rejects symlinks).
+
+**`atomic_private_write(path, content)`**: Durably replaces a file via a same-directory temp file: create temp → chmod 0600 → Windows ACL owner-only → write + flush + fsync → `os.replace` → fsync parent directory. If the destination exists, it must pass owner validation first.
+
+**Cross-platform hardening**: POSIX uses `st_uid` and `st_mode` bits. Windows uses PowerShell `Get-Acl` + `Set-Acl` with SDDL strings for owner-only ACEs. All Windows checks are best-effort (catch `CalledProcessError` for ephemeral temp paths).
+
+Used by: `bridges.py` (load/save bridges), `daemon.py` (write torrc), `gateway.py` (write gateway.env).
 
 ---
 
@@ -449,7 +493,7 @@ The Tor Project does not specify a maximum circuit lifetime. The [Tor Path Speci
 
 | Strategy | Connection Path | Provider Sees | Latency | Anonymity | When to Use |
 |----------|----------------|---------------|---------|-----------|-------------|
-| `TOR_SKIP_LLM=1` | Direct (or VPN) → LLM provider | VPN IP or real IP | Baseline | None for API calls | Default for most users |
+| Policy-approved request-scoped direct transport (non-strict only) | Direct (or VPN) → LLM provider | VPN IP or real IP | Baseline | None for API calls | Explicit provider opt-in and audit event required |
 | VPN → Tor → LLM | VPN → Tor exit → LLM provider | Tor exit IP (blocked) | +500ms-2s | IP hidden | Not recommended (blocked) |
 | Tor → VPN → LLM | Tor → VPN exit → LLM provider | VPN IP | +500ms-2s | IP hidden, exit node friendly | Requires VPN that accepts Tor connections |
 | Local models | None | N/A | 0ms | Full | When model quality suffices |

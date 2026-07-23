@@ -2,7 +2,7 @@
 
 ## Summary
 
-Hermes already had a centralized proxy resolver (`resolve_proxy_url`) that routes platform adapter traffic through `ALL_PROXY`/`HTTPS_PROXY`. But 6 subprocess spawn points and SDK client constructions were **bypassing the resolver entirely** — creating direct connections that leaked the real IP even when `ALL_PROXY=socks5://127.0.0.1:9050` was configured.
+Hermes already had a centralized proxy resolver (`resolve_proxy_url`) that routes external platform adapter traffic through `ALL_PROXY`/`HTTPS_PROXY`. Several subprocess spawn points and SDK client constructions were **bypassing the resolver entirely** — creating direct external connections that leaked the real IP even when `ALL_PROXY=socks5://127.0.0.1:9050` was configured. Gateway requests to local bridges and sidecars remain direct so their credentials and payloads are never disclosed to the configured proxy.
 
 This PR closes every gap found in an adversarial code audit of all outbound connection paths.
 
@@ -40,12 +40,14 @@ This PR closes every gap found in an adversarial code audit of all outbound conn
 
 ## Impact
 
-6 files, +84 / -15 lines. No breaking changes. All changes are conditional — when no proxy is configured, behavior is identical to before. When `ALL_PROXY` is set, these paths now route through Tor instead of leaking.
+Six upstream files are updated with no breaking changes. External traffic is conditionally routed through Tor when a proxy is configured, while gateway-to-local-bridge traffic continues to bypass the proxy.
 
 ## Verification
 
 - WhatsApp bridge: `ALL_PROXY` confirmed in `bridge_env` before `Popen` 
 - Photon sidecar: `GRPC_PROXY` confirmed in env dict  
+- Photon gateway-to-sidecar health and API requests remain direct
+- WhatsApp gateway-to-bridge health and API requests remain direct
 - Browser tool: `--proxy-server=socks5://127.0.0.1:9050` confirmed in agent-browser args
 - Firecrawl: `proxy=` kwarg confirmed in client constructor
 - Slack: `logger.warning(...)` confirmed on SOCKS5 detection

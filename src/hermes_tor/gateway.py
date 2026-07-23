@@ -26,46 +26,167 @@ Or as a standalone pre-start wrapper:
     python -m hermes_tor.gateway -- hermes gateway run
 """
 
+from __future__ import annotations
+
 import logging
 import os
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Mapping, Optional
+from urllib.parse import urlsplit
 
 from hermes_tor.constants import (
     BRIDGES_PATH,
     DEFAULT_SOCKS_PORT,
+    is_tor_installed,
 )
-from hermes_tor.hardening import check_tor_health
-from hermes_tor.manager import TorManager, TorStatus
+if TYPE_CHECKING:
+    from hermes_tor.manager import TorManager
 
-logger = logging.getLogger(__name__)
+from hermes_tor.secure_files import atomic_private_write, private_lock
+
+from hermes_tor.privacy import get_logger
+
+logger = get_logger(__name__)
 
 # Environment variables injected for gateway-wide Tor routing.
 # ALL_PROXY is the catch-all that resolve_proxy_url() checks after
 # platform-specific vars. Setting it means every platform adapter
 # that calls resolve_proxy_url() picks up the SOCKS5 proxy.
-GATEWAY_ENV_VARS = {
-    "ALL_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "HTTPS_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "HTTP_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "TOR_PROXY": f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}",
-    "TOR_ENABLED": "1",
-}
-TOR_HEALTH_VAR = "TOR_HEALTH"
+_GENERIC_PROXY_NAMES = ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY", "TOR_PROXY")
+_PLATFORM_PROXY_NAMES = (
+    "TELEGRAM_PROXY", "DISCORD_PROXY", "MATRIX_PROXY", "PHOTON_PROXY",
+    "WHATSAPP_PROXY", "SLACK_PROXY", "GRPC_PROXY",
+)
+PROXY_ENV_VARS = tuple(
+    dict.fromkeys(
+        name
+        for upper in (*_GENERIC_PROXY_NAMES, *_PLATFORM_PROXY_NAMES)
+        for name in (upper, upper.lower())
+    )
+)
+NO_PROXY_ENV_VARS = ("NO_PROXY", "no_proxy")
+_MISSING = object()
+_environment_snapshot: Optional[dict[str, object]] = None
+_environment_lock = threading.RLock()
 
-# When TOR_SKIP_LLM=1, LLM API calls bypass Tor to avoid exit node blocking.
+
+@dataclass(frozen=True)
+class ProxyPolicy:
+    """One immutable, validated routing decision for the gateway process."""
+
+    url: str
+    strict: bool
+    loopback_bypass: tuple[str, ...] = ("localhost", "127.0.0.1", "::1")
+
+
+class ProxyPolicyError(RuntimeError):
+    """The process environment cannot satisfy the requested proxy policy."""
+
+
+def _strict_mode(environment: Mapping[str, str]) -> bool:
+    return environment.get("TOR_STRICT_MODE", "").strip().lower() in {"1", "true", "yes"}
+
+
+def _validate_no_proxy(value: str, name: str, policy: ProxyPolicy) -> None:
+    if not value.strip() or not policy.strict:
+        return
+    entries = {part.strip().strip("[]").lower() for part in value.split(",") if part.strip()}
+    if not entries.issubset(policy.loopback_bypass):
+        raise ProxyPolicyError(
+            f"{name} may contain only {', '.join(policy.loopback_bypass)} in strict mode"
+        )
+
+
+def _validate_proxy_value(name: str, value: str, policy: ProxyPolicy) -> None:
+    candidate = value.strip()
+    if not candidate:
+        raise ProxyPolicyError(f"{name} is set but empty")
+    if candidate.lower() in {"direct", "direct://", "none", "off"}:
+        raise ProxyPolicyError(f"{name} disables proxy routing")
+    parsed = urlsplit(candidate)
+    if parsed.scheme not in {"socks5", "socks5h"} or not parsed.hostname or parsed.port is None:
+        raise ProxyPolicyError(f"{name} has an unsupported proxy value: {candidate!r}")
+    if candidate != policy.url:
+        raise ProxyPolicyError(f"{name} conflicts with immutable proxy policy {policy.url!r}")
+
+
+def establish_proxy_policy(
+    socks_port: int = DEFAULT_SOCKS_PORT,
+    *,
+    strict: Optional[bool] = None,
+    environment: Optional[Mapping[str, str]] = None,
+) -> ProxyPolicy:
+    """Build and validate the policy before any network client is imported.
+
+    In strict mode every pre-existing, platform-specific proxy setting is
+    considered authoritative input: empty, direct, unsupported, and conflicting
+    settings fail closed rather than being silently overwritten.
+    """
+    env = os.environ if environment is None else environment
+    if not 1 <= socks_port <= 65535:
+        raise ProxyPolicyError(f"invalid SOCKS port: {socks_port}")
+    policy = ProxyPolicy(
+        url=f"socks5://127.0.0.1:{socks_port}",
+        strict=_strict_mode(env) if strict is None else strict,
+    )
+    if policy.strict:
+        for name in NO_PROXY_ENV_VARS:
+            if name in env:
+                _validate_no_proxy(env[name], name, policy)
+        for name in PROXY_ENV_VARS:
+            if name in env:
+                _validate_proxy_value(name, env[name], policy)
+    return policy
+
+
+def _is_http_proxy(value: str) -> bool:
+    """Return whether a proxy URL is suitable for HTTP-only integrations."""
+    parsed = urlsplit(value.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.hostname)
+
+
+def _policy_environment(
+    policy: ProxyPolicy, environment: Optional[Mapping[str, str]] = None
+) -> dict[str, str]:
+    values = {name: policy.url for name in PROXY_ENV_VARS}
+    # Slack's SDK rejects SOCKS URLs. In non-strict mode, retain an explicitly
+    # configured HTTP-to-SOCKS bridge (for example, a local Privoxy instance)
+    # rather than replacing it with the generic Tor SOCKS endpoint.
+    env = os.environ if environment is None else environment
+    if not policy.strict:
+        for name in ("SLACK_PROXY", "slack_proxy"):
+            if name in env and _is_http_proxy(env[name]):
+                values[name] = env[name]
+    values.update({"TOR_PROXY": policy.url, "tor_proxy": policy.url, "TOR_ENABLED": "1"})
+    # Preserve loopback-only communication with local gateway sidecars.
+    bypass = ",".join(policy.loopback_bypass)
+    values.update({"NO_PROXY": bypass, "no_proxy": bypass})
+    return values
+
+
+GATEWAY_ENV_VARS = _policy_environment(
+    ProxyPolicy(f"socks5://127.0.0.1:{DEFAULT_SOCKS_PORT}", strict=False)
+)
+# Add TOR_HEALTH so clients can observe gateway-level Tor health state.
+GATEWAY_ENV_VARS["TOR_HEALTH"] = "1"
+
+# TOR_SKIP_LLM is a signal for LLM integrations to bypass Tor on their own
+# client.  Generic proxy variables must remain in place: they are also the
+# gateway-wide routing mechanism for platform adapters and tools.
 # OpenAI, Anthropic, and their CDNs (Cloudflare) block known Tor exit IPs
 # with 403/429/CAPTCHA. The API key already identifies your account — Tor
 # for LLM calls provides IP privacy but not account anonymity. Bypassing
 # Tor for LLM calls preserves streaming performance (TTFT) while keeping
 # all other traffic (messaging platforms, web tools, subagents) through Tor.
-LLM_SKIP_VARS = {"ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY"}
 
 
-def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
+def inject_gateway_env(
+    socks_port: int = DEFAULT_SOCKS_PORT, *, policy: Optional[ProxyPolicy] = None
+) -> ProxyPolicy:
     """Set ALL_PROXY + HTTPS_PROXY + HTTP_PROXY for gateway-wide Tor routing.
 
     Must be called BEFORE the Hermes gateway initializes any platform
@@ -82,44 +203,110 @@ def inject_gateway_env(socks_port: int = DEFAULT_SOCKS_PORT):
       - WhatsApp:   ✅ After applying 0002-whatsapp-proxy.patch
       - Email:      ❌ Raw SMTP/IMAP — no HTTP proxy support
     """
-    proxy_url = f"socks5://127.0.0.1:{socks_port}"
-    for key, value in GATEWAY_ENV_VARS.items():
-        os.environ[key] = value.replace(str(DEFAULT_SOCKS_PORT), str(socks_port))
+    global _environment_snapshot
+    policy = policy or establish_proxy_policy(socks_port)
+    if policy.url != f"socks5://127.0.0.1:{socks_port}":
+        raise ProxyPolicyError("supplied policy does not match requested SOCKS port")
+    values = _policy_environment(policy)
+    with _environment_lock:
+        if _environment_snapshot is None:
+            _environment_snapshot = {
+                key: os.environ.get(key, _MISSING) for key in values
+            }
+        os.environ.update(values)
     logger.info(
         "Gateway Tor environment injected: ALL_PROXY=%s, TOR_ENABLED=1, "
         "%d env vars set",
-        proxy_url,
-        len(GATEWAY_ENV_VARS),
+        policy.url,
+        len(values),
     )
+    return policy
 
 
 def clear_gateway_env():
-    """Remove gateway Tor environment variables."""
-    for key in GATEWAY_ENV_VARS:
-        os.environ.pop(key, None)
-    os.environ.pop(TOR_HEALTH_VAR, None)
-    logger.info("Gateway Tor environment cleared")
+    """Restore the exact environment which preceded proxy injection."""
+    global _environment_snapshot
+    with _environment_lock:
+        if _environment_snapshot is None:
+            return
+        items = _environment_snapshot.items()
+        if os.name == "nt":
+            # Windows os.environ is case-insensitive — ALL_PROXY and all_proxy
+            # are the same key.  Process lowercase variants first so uppercase
+            # restorations overwrite them instead of being popped away.
+            items = sorted(items, key=lambda kv: kv[0].isupper())
+        for key, previous in items:
+            if previous is _MISSING:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = str(previous)
+        _environment_snapshot = None
+    logger.info("Gateway Tor environment restored")
+
+
+def block_gateway_env():
+    """Fail closed before recovery; never expose clients to a direct fallback.
+
+    Sets all proxy vars to a dead SOCKS5 endpoint and signals TOR_HEALTH=0
+    so downstream clients know Tor is unavailable.
+    """
+    blocked = "socks5://127.0.0.1:1"
+    for name in PROXY_ENV_VARS:
+        os.environ[name] = blocked
+    os.environ["TOR_ENABLED"] = "0"
+    os.environ["TOR_HEALTH"] = "0"
+    logger.warning("Gateway Tor blocked — all proxy vars set to dead endpoint")
+
+
+def create_httpx_client(*, policy: ProxyPolicy, asynchronous: bool = False, **kwargs):
+    """Create an HTTPX client with a verified explicit SOCKS transport.
+
+    ``trust_env=False`` prevents a later environment change from altering the
+    immutable routing decision.  Callers must use this factory in strict mode;
+    clients with no explicit, testable proxy hook are unsupported.
+    """
+    import httpx
+
+    transport_type = httpx.AsyncHTTPTransport if asynchronous else httpx.HTTPTransport
+    client_type = httpx.AsyncClient if asynchronous else httpx.Client
+    kwargs.pop("proxy", None)
+    kwargs.pop("transport", None)
+    return client_type(
+        transport=transport_type(proxy=policy.url), trust_env=False, **kwargs
+    )
+
+
+def require_verified_proxy_clients(policy: ProxyPolicy, *client_names: str) -> None:
+    """Fail closed for clients for which this module has no explicit transport."""
+    if not policy.strict:
+        return
+    unsupported = sorted(set(client_names) - {"httpx"})
+    if unsupported:
+        raise ProxyPolicyError(
+            "strict mode has no verified explicit proxy integration for: "
+            + ", ".join(unsupported)
+        )
 
 
 def skip_llm_proxy():
-    """Remove proxy vars so LLM API calls bypass Tor.
+    """Request a Tor bypass from integrations that create LLM clients.
 
     Call this when LLM providers block Tor exit nodes (403/429 errors).
-    Removes ALL_PROXY/HTTPS_PROXY/HTTP_PROXY from os.environ so the OpenAI
-    SDK connects direct (or through VPN). All other traffic (platform
-    adapters, web tools, subagents) still routes through Tor because
-    platform-specific proxy vars are set independently.
+    This deliberately leaves the process-wide proxy variables untouched:
+    platform adapters, web tools, and subprocesses rely on those variables
+    for Tor routing.  The LLM integration must interpret TOR_SKIP_LLM and
+    disable environment-proxy inheritance only for its own HTTP client.
 
     Only meaningful when TOR_ENABLED=1. Has no effect otherwise.
     """
     if os.environ.get("TOR_ENABLED", "").lower() not in ("1", "true", "yes"):
         return
-    for key in LLM_SKIP_VARS:
-        os.environ.pop(key, None)
+    if _strict_mode(os.environ):
+        raise ProxyPolicyError("LLM proxy bypass is unsupported in strict mode")
     os.environ["TOR_SKIP_LLM"] = "1"
     logger.warning(
-        "TOR_SKIP_LLM=1 — LLM API calls will bypass Tor to avoid exit node blocking. "
-        "Platform adapters still route through Tor via platform-specific proxy vars."
+        "TOR_SKIP_LLM=1 — requesting a Tor bypass for LLM clients; "
+        "gateway-wide proxy variables remain enabled."
     )
 
 
@@ -130,21 +317,20 @@ def is_llm_skipped() -> bool:
 def write_gateway_env_file(
     socks_port: int = DEFAULT_SOCKS_PORT,
     env_path: Optional[Path] = None,
-    tor_healthy: bool = False,
+    healthy: bool = True,
 ):
-    """Write ALL_PROXY and related vars to ~/.hermes/.env for persistent config.
+    """Write proxy vars to a dedicated private Tor environment file.
 
-    The Hermes gateway loads ~/.hermes/.env at startup (gateway/run.py line 1422).
-    Writing these vars to .env means Tor routing persists across gateway restarts
-    without needing to inject env vars at runtime.
+    Keeping Tor values separate avoids parsing or rewriting the gateway's
+    credential-bearing ``~/.hermes/.env`` file.
 
     Args:
         socks_port: SOCKS5 port (default: 9050)
-        env_path: Path to .env file (default: ~/.hermes/.env)
-        tor_healthy: Record a successful SOCKS listener health check
+        env_path: Path to .env file (default: ~/.hermes/tor/gateway.env)
+        healthy: If False, TOR_ENABLED and TOR_HEALTH are set to 0
     """
     if env_path is None:
-        env_path = Path.home() / ".hermes" / ".env"
+        env_path = Path.home() / ".hermes" / "tor" / "gateway.env"
 
     proxy_url = f"socks5://127.0.0.1:{socks_port}"
 
@@ -158,48 +344,35 @@ def write_gateway_env_file(
                 existing[key.strip()] = value.strip()
 
     # Merge Tor proxy vars (preserve existing non-Tor vars)
-    tor_vars = {
-        "ALL_PROXY": proxy_url,
-        "HTTPS_PROXY": proxy_url,
-        "HTTP_PROXY": proxy_url,
-        "TOR_PROXY": proxy_url,
-        "TOR_ENABLED": "1",
-    }
+    tor_vars = _policy_environment(
+        ProxyPolicy(proxy_url, strict=False), environment=existing
+    )
+    tor_vars["TOR_HEALTH"] = "1" if healthy else "0"
+    if not healthy:
+        tor_vars["TOR_ENABLED"] = "0"
     existing.update(tor_vars)
-    if tor_healthy:
-        existing[TOR_HEALTH_VAR] = "ok"
-    else:
-        existing.pop(TOR_HEALTH_VAR, None)
 
-    # Write back
+    # Write back — atomic private write so readers see either complete version
     lines = []
     for key, value in sorted(existing.items()):
         lines.append(f"{key}={value}")
+    content = "\n".join(lines) + "\n"
 
-    env_path.parent.mkdir(parents=True, exist_ok=True)
-    env_path.write_text("\n".join(lines) + "\n")
+    with private_lock(env_path):
+        atomic_private_write(env_path, content)
     logger.info("Gateway Tor config written to %s (%d vars)", env_path, len(tor_vars))
 
 
 def remove_gateway_env_file(env_path: Optional[Path] = None):
-    """Remove Tor proxy vars from ~/.hermes/.env."""
+    """Remove the dedicated Tor proxy environment file."""
     if env_path is None:
-        env_path = Path.home() / ".hermes" / ".env"
+        env_path = Path.home() / ".hermes" / "tor" / "gateway.env"
 
-    if not env_path.exists():
-        return
-
-    tor_keys = set(GATEWAY_ENV_VARS.keys()) | {TOR_HEALTH_VAR}
-    lines = []
-    for line in env_path.read_text().splitlines():
-        line_stripped = line.strip()
-        if line_stripped and not line_stripped.startswith("#") and "=" in line_stripped:
-            key = line_stripped.split("=", 1)[0].strip()
-            if key in tor_keys:
-                continue
-        lines.append(line)
-
-    env_path.write_text("\n".join(lines) + ("\n" if lines else ""))
+    with private_lock(env_path):
+        if env_path.is_symlink():
+            raise OSError(f"refusing symbolic link: {env_path}")
+        if env_path.exists():
+            env_path.unlink()
     logger.info("Gateway Tor config removed from %s", env_path)
 
 
@@ -284,7 +457,7 @@ class TorWatchdog:
         """Check Tor health. Restart if dead. Rotate circuit if due."""
         status = self._mgr.status()
 
-        if status.state.name == "RUNNING" and status.circuit_established:
+        if status.state.name == "RUNNING" and status.healthy:
             self._restart_count = 0  # Reset counter on stable state
 
             # Circuit rotation
@@ -293,10 +466,11 @@ class TorWatchdog:
                 self._rotate_circuit()
                 self._last_circuit_rotation = now
 
-        elif status.state.name == "ERROR" or not status.circuit_established:
+        elif status.state.name == "ERROR" or not status.healthy:
             logger.warning(
-                "Tor health check failed (state=%s, circuit=%s) — attempting restart",
-                status.state.name, status.circuit_established,
+                "Tor layered health check failed (state=%s, process=%s, socks=%s, bootstrap=%s, route=%s)",
+                status.state.name, status.process_healthy, status.socks_healthy,
+                status.bootstrap_complete, status.external_route_verified,
             )
             self._restart_tor()
 
@@ -306,6 +480,9 @@ class TorWatchdog:
 
     def _restart_tor(self):
         """Restart Tor daemon with exponential backoff."""
+        # Block new connections before stopping Tor or waiting through backoff.
+        block_gateway_env()
+        write_gateway_env_file(1, healthy=False)
         if self._restart_count >= self._max_restart_attempts:
             logger.error(
                 "Tor restart limit reached (%d/%d) — watchdog giving up. "
@@ -333,42 +510,32 @@ class TorWatchdog:
         # Restart
         try:
             status = self._mgr.start(timeout=60)
-            if status.state.name == "RUNNING" and check_tor_health(self._mgr.socks_port):
+            status = self._mgr.status(verify_route=True)
+            if status.state.name == "RUNNING" and status.healthy:
                 logger.info("Tor restarted successfully (attempt %d)", self._restart_count)
                 self._restart_count = 0
 
                 # Re-inject env vars so new connections pick up the fresh proxy
                 inject_gateway_env(self._mgr.socks_port)
-                write_gateway_env_file(self._mgr.socks_port, tor_healthy=True)
+                write_gateway_env_file(self._mgr.socks_port)
 
                 self._last_restart_time = time.time()
             else:
-                logger.error(
-                    "Tor restart failed or SOCKS listener unavailable: %s",
-                    status.error,
-                )
+                logger.error("Tor restart failed: %s", status.error)
         except Exception:
             logger.exception("Tor restart raised exception")
 
     def _rotate_circuit(self):
         """Request a new Tor circuit (fresh exit node).
 
-        Sends NEWNYM signal via ControlPort if available.
+        Uses daemon's cookie-authenticated NEWNYM via ControlPort.
         Falls back to daemon restart for circuit rotation.
         """
-        try:
-            import socket
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.settimeout(5)
-            sock.connect(("127.0.0.1", self._mgr.control_port))
-            sock.sendall(b"AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n")
-            response = sock.recv(1024)
-            sock.close()
-            if b"250" in response:
-                logger.info("Tor circuit rotated via NEWNYM signal")
-                return
-        except Exception:
-            logger.debug("NEWNYM via ControlPort failed, restarting daemon for fresh circuit")
+        daemon = self._mgr._daemon
+        if daemon and daemon.signal_newnym():
+            logger.info("Tor circuit rotated via authenticated NEWNYM signal")
+            return
+        logger.debug("Authenticated NEWNYM failed, restarting daemon for fresh circuit")
 
         # Fallback: restart daemon for fresh circuit
         logger.info("Restarting Tor daemon for fresh circuit...")
@@ -396,10 +563,24 @@ def start_tor_for_gateway(
     Raises:
         TorDaemonError: If Tor fails to bootstrap
     """
-    # A health marker describes only the current successful bootstrap attempt;
-    # never carry a stale marker into a restart.
-    os.environ.pop(TOR_HEALTH_VAR, None)
-    mgr = TorManager(auto_download=True, socks_port=socks_port)
+    # Freeze and validate routing before importing TorManager: its downloader
+    # is the first module in this path which imports an HTTP network client.
+    policy = establish_proxy_policy(socks_port)
+    if policy.strict and not is_tor_installed():
+        raise ProxyPolicyError(
+            "strict mode requires a preinstalled Tor binary; run "
+            "`hermes-tor download` before enabling TOR_STRICT_MODE"
+        )
+
+    # Environment variables alone are not a verifiable transport. None of the
+    # gateway platform adapters are constructed in this package, so strict mode
+    # must reject them until each adapter is wired to an explicit proxy client.
+    require_verified_proxy_clients(
+        policy, *(name.removesuffix("_PROXY").lower() for name in _PLATFORM_PROXY_NAMES)
+    )
+    from hermes_tor.manager import TorManager
+
+    mgr = TorManager(auto_download=not policy.strict, socks_port=socks_port)
 
     # Load bridges if available
     bridge_count = mgr.load_bridges()
@@ -415,33 +596,28 @@ def start_tor_for_gateway(
     status = mgr.start(timeout=bootstrap_timeout)
 
     if status.state.name != "RUNNING":
-        if write_env:
-            write_gateway_env_file(socks_port, tor_healthy=False)
         raise RuntimeError(f"Tor failed to start: {status.error}")
 
-    # Do not trust process state alone: a daemon can report RUNNING before its
-    # SOCKS listener is usable (or after that listener has died).  Failing here
-    # prevents the gateway from starting with a dead proxy configuration.
-    if not check_tor_health(socks_port):
+    # No client is enabled and no persistent proxy is written until all four
+    # layers (process, SOCKS, bootstrap, route) have independently passed.
+    status = mgr.status(verify_route=True)
+    if not status.healthy:
+        block_gateway_env()
         mgr.stop()
-        if write_env:
-            write_gateway_env_file(socks_port, tor_healthy=False)
-        raise RuntimeError(
-            f"Tor proxy not available at socks5://127.0.0.1:{socks_port}"
-        )
+        raise RuntimeError(f"Tor verification failed: {status.verification_error or status}")
 
     # Inject environment
-    inject_gateway_env(socks_port)
-    os.environ[TOR_HEALTH_VAR] = "ok"
+    inject_gateway_env(socks_port, policy=policy)
 
     # Persist to .env for gateway restarts
     if write_env:
-        write_gateway_env_file(socks_port, tor_healthy=True)
+        write_gateway_env_file(socks_port)
 
     logger.info(
-        "Tor ready for gateway — SOCKS5 %s, circuit %s, bridges %d, uptime %.1fs",
+        "Tor ready for gateway — SOCKS5 %s, bootstrap %s%%, route verified %s, bridges %d, uptime %.1fs",
         status.socks_proxy_url,
-        "established" if status.circuit_established else "pending",
+        status.bootstrap_percent,
+        status.external_route_verified,
         status.bridge_count,
         status.uptime_seconds or 0,
     )
@@ -524,7 +700,7 @@ def main():
     print(f"[hermes-tor] Tor running — SOCKS5 on 127.0.0.1:{args.port}")
     print(f"[hermes-tor] ALL_PROXY injected — all gateway platforms will route through Tor")
     print(f"[hermes-tor] Self-healing watchdog active (health every 15s, circuit rotate every 10min)")
-    print(f"[hermes-tor] Launching: {' '.join(gateway_cmd)}")
+    print("[hermes-tor] Launching gateway (command arguments redacted)")
     print()
 
     # Exec the gateway

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Micro-TOR client for Hermes agents — bridge-backed anonymous routing via SOCKS5"
 requires-python = ">=3.11"
 dependencies = [
-    "httpx>=0.28",
+    "httpx[socks]>=0.28",
 ]
 
 [project.optional-dependencies]
@@ -17,6 +17,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+hermes_tor = ["compatibility-manifest.json", "keys/*.asc"]
 
 [project.scripts]
 hermes-tor-mcp = "hermes_tor.mcp_server:serve"

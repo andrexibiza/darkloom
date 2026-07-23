@@ -220,7 +220,8 @@ You → VPN (encrypts all traffic from your machine)
 
 ### Rotating Bridges
 
-Bridges get blocked over time. Rotate daily:
+Bridges get blocked over time. Replace them when needed through a supported
+BridgeDB workflow:
 
 ```bash
 # Manual rotation
@@ -229,12 +230,18 @@ tor_stop
 tor_start
 tor_verify
 
-# Automated rotation (daily cron job)
+# Optional automated attempt (the public BridgeDB workflow may reject it)
 hermes cron create "0 0 * * *" \
   --name "Tor Bridge Rotation" \
   --script tor_rotate_bridges.py \
   --no-agent
 ```
+
+Automated requests expose the requesting network and a recurring schedule to
+BridgeDB, creating metadata that may be correlated with later Tor use. The
+public web flow can require an interactive challenge; without an authenticated,
+supported BridgeDB automation workflow, this cron job cannot promise daily
+freshness. It retains the existing set when a response is incomplete or invalid.
 
 ### Bridge Troubleshooting
 
@@ -274,18 +281,18 @@ remove_gateway_env_file()
 
 OpenAI, Anthropic, and their API gateways (Cloudflare, AWS WAF) aggressively block traffic from known Tor exit nodes. You will see HTTP 403, 429, or invisible CAPTCHA challenges. This is not a bug — it's the providers protecting their APIs.
 
-**Solution:** `TOR_SKIP_LLM=1` routes LLM API calls direct (or through VPN) while keeping all other traffic through Tor. The API key already identifies your account — Tor adds IP privacy but not account anonymity for API calls. For truly anonymous LLM access, use local models or providers that don't block Tor.
+**Solution:** Strict mode always routes LLM requests through Tor. In non-strict mode, construct a request-scoped client with `create_llm_client()`; direct routing requires a deliberate per-provider policy and produces a critical security audit event. This never changes the gateway proxy environment.
 
 ```python
-from hermes_tor.gateway import skip_llm_proxy
-skip_llm_proxy()  # Removes ALL_PROXY/HTTPS_PROXY/HTTP_PROXY for LLM calls
+from hermes_tor.gateway import create_llm_client, LLMProviderPolicy, LLMRoute
+client = create_llm_client("example", LLMRoute.DIRECT, {"example": LLMProviderPolicy(allow_direct=True)})
 ```
 
 ### Tor Latency
 
 3-hop Tor circuit + obfs4 bridges adds 500ms-2s latency. Streaming TTFT (Time To First Token) will spike. Batch API calls are less affected — the hit is on connection setup, not per-token.
 
-**Tradeoff:** For streaming chat, use `TOR_SKIP_LLM=1`. For batch workloads (subagent research, scheduled tasks), Tor overhead is negligible.
+**Tradeoff:** For streaming chat in non-strict mode, use an audited provider-approved direct client. For batch workloads (subagent research, scheduled tasks), Tor overhead is negligible.
 
 ### execute_code System Binary Leaks
 
@@ -375,17 +382,29 @@ iptables -A OUTPUT -j DROP                            # Block everything else
 | LEAK-06 | ✅ FIXED | WebSocket proxy persistence — verified aiohttp_socks ProxyConnector handles full lifecycle |
 | LEAK-07 | ✅ FIXED | DNS leak — verified rdns=True on all aiohttp connectors |
 | LEAK-08 | ✅ FIXED | Slack SOCKS5 blocked — elevated to WARNING with privoxy workaround |
-| LEAK-09 | ✅ FIXED | Gateway wrapper verifies the SOCKS listener before launch and records `TOR_HEALTH=ok` only after success |
+| LEAK-09 | ✅ FIXED | Gateway restart race — TOR_HEALTH flag prevents startup on dead proxy |
 | LEAK-10 | ✅ FIXED | Platform env override — warns when empty platform var overrides ALL_PROXY |
 | LEAK-11 | 📄 DOCUMENTED | Discord voice UDP — SOCKS5 protocol limitation |
 | LEAK-12 | 📄 DOCUMENTED | Email SMTP/IMAP — Python smtplib/imaplib don't support SOCKS5 |
 | LEAK-13 | 📄 DOCUMENTED | IRC — raw TCP sockets |
 | LEAK-14 | 📄 DOCUMENTED | Import-time network calls — audited; no leaks found in major adapters |
-| LEAK-15 | 📄 DOCUMENTED | LLM exit node hostility — providers block Tor IPs (403/429); use TOR_SKIP_LLM=1 |
+| LEAK-15 | 📄 DOCUMENTED | LLM exit node hostility — providers block Tor IPs (403/429); use audited request-scoped routing |
 | LEAK-16 | 📄 DOCUMENTED | execute_code system binary leaks — git/curl/pip bypass proxy; use torsocks on Linux |
-| LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — use TOR_SKIP_LLM=1 for streaming, Tor for batch |
+| LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — use audited request-scoped routing for streaming, Tor for batch |
 
-**TOR_STRICT_MODE**: This flag is available to integrations that explicitly check it; it does **not** itself block Discord voice, Email, or IRC. Keep those direct-network features disabled. The `hermes_tor.gateway` wrapper independently refuses to launch when its Tor SOCKS listener is unavailable.
+**`TOR_STRICT_MODE` guarantee:** Set `TOR_STRICT_MODE=1` (or call
+`hermes_tor.enable_strict_mode()`) to activate the centralized, default-deny
+policy. Wired clients must identify an explicitly allowed channel and provide a
+valid proxy before creating a client, socket, or network-capable child process.
+UDP voice, direct SMTP/IMAP, IRC, raw-socket adapters, unknown future channels,
+direct LLM/web/browser/MCP calls, and non-proxy-aware subprocesses raise
+`NetworkPolicyError` before I/O. Tor bootstrap and loopback control are the only
+explicit direct capabilities. From a Hermes Agent checkout at commit
+`2244be2282e29a155379e83c20a99942045d5172`, apply
+`patches/0003-harden-tor-proxy-all-platforms.patch` first and then
+`patches/0004-central-network-policy-fail-closed.patch`. Verify both with
+`git apply --check` before applying them; patch 0004 is intentionally based on
+the proxy wiring installed by patch 0003.
 Full audit: `python -m hermes_tor.hardening audit`
 
 ## Reference

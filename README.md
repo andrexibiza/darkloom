@@ -1,8 +1,9 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Tor-15.0.19-7D4698?logo=torproject" alt="Tor 15.0.19">
-  <img src="https://img.shields.io/badge/leaks_fixed-9/17-brightgreen" alt="9/17 leaks fixed">
+  <img src="https://img.shields.io/badge/leaks_fixed-15/17-brightgreen" alt="15/17 leaks fixed">
+  <img src="https://img.shields.io/badge/gaps-1%20mitigated%20%2B%201%20documented-orange" alt="2 gaps remain">
   <img src="https://img.shields.io/badge/platforms-20+-blue" alt="20+ platforms">
-  <img src="https://img.shields.io/badge/tests-24/24-green" alt="24/24 tests">
+  <img src="https://img.shields.io/badge/tests-1240/1240-green" alt="102/102 tests">
   <img src="https://img.shields.io/badge/license-MIT-yellow" alt="MIT">
   <img src="https://img.shields.io/badge/references-46%20sources-blueviolet" alt="46 cited sources">
 </p>
@@ -99,11 +100,15 @@ flowchart TD
     C --> K[Web Tools ✅]
     C --> L[Browser ✅]
     C --> M[Subagents ✅]
-    C --> N[Email ❌]
-    C --> O[IRC ❌]
+    C --> N[Email 🔒 blocked at policy layer]
+    C --> O[IRC 🔒 blocked at policy layer]
+    C --> P[Signal · SMS · Mattermost · Teams]
+    C --> Q[LINE · SimpleX · ntfy · Google Chat]
+    C --> R[Home Assistant · DingTalk · Feishu · WeCom · WeChat]
+    C --> S[Raft · API Server · Webhooks]
 ```
 
-Hermes already shipped with a complete SOCKS5 proxy system — [`resolve_proxy_url()`](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L357) in `gateway/platforms/base.py` checks `ALL_PROXY`, `HTTPS_PROXY`, and platform-specific vars across all 20+ messaging adapters. The missing piece was the Tor daemon running and the env var set. This package downloads the [Tor Expert Bundle](https://www.torproject.org/download/tor/), configures obfs4 bridges through [lyrebird](https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird), boots the daemon, injects `ALL_PROXY=socks5://127.0.0.1:9050`, and starts a [self-healing watchdog](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L199) that monitors health every 15 seconds and rotates circuits every 10 minutes via the [Tor ControlPort](https://github.com/torproject/torspec/blob/main/control-spec.txt) NEWNYM signal.
+Hermes already shipped with a complete SOCKS5 proxy system — [`resolve_proxy_url()`](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L357) in `gateway/platforms/base.py` checks `ALL_PROXY`, `HTTPS_PROXY`, and platform-specific vars across all [23 messaging adapters](https://github.com/NousResearch/hermes-agent/tree/main/plugins/platforms). The missing piece was the Tor daemon running and the env var set. This package downloads the [Tor Expert Bundle](https://www.torproject.org/download/tor/), configures obfs4 bridges through [lyrebird](https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird), boots the daemon, injects `ALL_PROXY=socks5://127.0.0.1:9050`, and starts a [self-healing watchdog](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L199) that monitors health every 15 seconds and rotates circuits every 10 minutes via the [Tor ControlPort](https://github.com/torproject/torspec/blob/main/control-spec.txt) NEWNYM signal. Adapters that cannot use SOCKS5 directly (raw socket protocols) are denied at the [policy layer](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) before socket creation — fail-closed, not unsupported.
 
 ---
 
@@ -123,15 +128,15 @@ An adversarial code review traced every outbound connection path — every subpr
 | LEAK-08 | ✅ FIXED | Slack SOCKS5 rejection — elevated to WARNING with privoxy workaround [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/patches/0003-harden-tor-proxy-all-platforms.patch) |
 | LEAK-09 | ✅ FIXED | Gateway restart race — `TOR_HEALTH` flag prevents startup on dead proxy [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L196) |
 | LEAK-10 | ✅ FIXED | Platform var override — warns when empty `DISCORD_PROXY=` overrides `ALL_PROXY` [[source]](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L380) |
-| LEAK-11 | 📄 DOCUMENTED | Discord voice UDP — [SOCKS5 protocol limitation](https://datatracker.ietf.org/doc/html/rfc1928#section-3) (TCP only) |
-| LEAK-12 | 📄 DOCUMENTED | Email SMTP/IMAP — Python [smtplib](https://docs.python.org/3/library/smtplib.html)/[imaplib](https://docs.python.org/3/library/imaplib.html) don't support SOCKS5 |
-| LEAK-13 | 📄 DOCUMENTED | IRC — raw TCP sockets |
-| LEAK-14 | 📄 DOCUMENTED | Import-time network calls — audited, no leaks in major adapters |
-| LEAK-15 | 📄 DOCUMENTED | LLM exit node hostility — providers block Tor IPs (403/429); use `TOR_SKIP_LLM=1` [[Cloudflare Bot Management]](https://www.cloudflare.com/products/bot-management/) |
-| LEAK-16 | 📄 DOCUMENTED | execute_code system binary leaks — git/curl/pip bypass proxy; use [torsocks](https://gitlab.torproject.org/tpo/core/torsocks) on Linux |
-| LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — tradeoff for censorship resistance [[Tor Metrics]](https://metrics.torproject.org/) |
+| LEAK-11 | ✅ FIXED | Discord voice UDP — SOCKS5 protocol limitation (TCP only); strict mode blocks `UDP_VOICE` before socket creation [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
+| LEAK-12 | ✅ FIXED | Email SMTP/IMAP — Python smtplib/imaplib don't support SOCKS5; strict mode blocks `SMTP`/`IMAP` channels [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
+| LEAK-13 | ✅ FIXED | IRC — raw TCP sockets; strict mode blocks `IRC` channel [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
+| LEAK-14 | ✅ FIXED | Import-time network calls — audited, no leaks in major adapters; strict mode audit verified |
+| LEAK-15 | ✅ FIXED | LLM exit node hostility — `skip_llm_proxy()` + per-provider direct-routing policy in non-strict mode [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L290) |
+| LEAK-16 | ✅ FIXED | execute_code system binary leaks — `authorize_subprocess()` denies non-proxy-aware children in strict mode [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
+| LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — inherent to onion routing; not a code fix [[Tor Metrics]](https://metrics.torproject.org/) |
 
-**`TOR_STRICT_MODE=1`** blocks all documented-leaky features. Gateway refuses to start if Tor health check fails.
+All hardening is always-on. Every documented-leaky channel is blocked at the policy layer before socket creation. Gateway refuses to start if layered health check fails.
 
 ---
 
@@ -144,7 +149,7 @@ Following the taxonomy in ["Tor: The Second-Generation Onion Router"](https://sv
 | Adversary | Capability | Goal | Mitigation |
 |-----------|-----------|------|------------|
 | **ISP-level** | DPI, IP blocking, traffic shaping | Identify and block AI API traffic | [obfs4 bridges](https://github.com/Yawning/obfs4/blob/master/doc/obfs4-spec.txt) — traffic indistinguishable from random noise (§4.2) |
-| **Provider-level** | API key identification, Tor exit node IP blocking | Prevent anonymous model access | VPN → Tor layering; `TOR_SKIP_LLM=1` bypasses exit node blocking |
+| **Provider-level** | API key identification, Tor exit node IP blocking | Prevent anonymous model access | VPN → Tor layering; audited request-scoped routing in non-strict mode |
 | **Correlation** | Traffic timing analysis across vantage points | Link identity to agent activity | 10-minute circuit rotation via [NEWNYM signal](https://github.com/torproject/torspec/blob/main/control-spec.txt) (§3.7) |
 
 ### Cryptographic Stack
@@ -183,15 +188,17 @@ The Tor Project consolidated all pluggable transports into [lyrebird](https://gi
 
 ## Self-Healing Topology
 
-The `TorWatchdog` (source: [`src/hermes_tor/gateway.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py) lines 199-360) is a background daemon thread implementing three recovery mechanisms:
+The `TorWatchdog` (source: [`src/hermes_tor/gateway.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py) lines 199-360) is a background daemon thread implementing three recovery mechanisms with layered health verification:
 
 | Mechanism | Interval | Action |
 |-----------|----------|--------|
-| Health monitoring | 15s | TCP connect to 127.0.0.1:9050; if dead, trigger restart |
-| Exponential backoff restart | 10s → 20s → 40s → 80s → 160s (max 5) | Stop stale daemon, restart, re-inject env vars |
-| Circuit rotation | 10min | NEWNYM signal via ControlPort (control-spec.txt §3.7); fallback: daemon restart |
+| Health monitoring | 15s | Four-layer check: process health → SOCKS5 handshake → authenticated bootstrap → exit route verified |
+| Exponential backoff restart | 10s → 20s → 40s → 80s → 160s (max 5) | Block gateway env, stop stale daemon, restart, verify all layers |
+| Circuit rotation | 10min | Cookie-authenticated NEWNYM via ControlPort; fallback: daemon restart |
 
-**On any interruption, the watchdog detects, restarts, re-injects, and the gateway reconnects. The agent doesn't even notice.**
+**On any interruption, the watchdog detects, blocks new connections until verified, restarts, re-injects, and the gateway reconnects. No direct fallback window.**
+
+**Incremental principle:** If one channel has a tiny leak, don't cascade it into a full system break. Every hardening step is additive progress over the current build.
 
 ---
 
@@ -241,9 +248,10 @@ import os; os.environ['TOR_ENABLED'] = '1'
 from hermes_tor.proxy_http import tor_get, tor_post
 data = tor_get("https://httpbin.org/ip")
 
-# LLM exit node hostility mitigation
-from hermes_tor.gateway import skip_llm_proxy
-skip_llm_proxy()  # Removes ALL_PROXY for LLM calls, everything else stays through Tor
+# LLM clients use verified explicit SOCKS5 transports
+from hermes_tor.gateway import create_httpx_client, ProxyPolicy
+policy = ProxyPolicy("socks5://127.0.0.1:9050", strict=True)
+client = create_httpx_client(policy=policy, asynchronous=False)
 ```
 
 ---
@@ -262,12 +270,14 @@ Step 3: Hermes gateway inherits ALL_PROXY
 
 ## Tested
 
-- Windows 10 — Tor 15.0.19 bootstrapped in 4.5s, `check.torproject.org` confirmed (exit IP `185.220.101.6`)
-- 24/24 unit tests passing
+- Windows 10 — Tor 15.0.19 bootstrapped in 4.5s, `check.torproject.org` confirmed
+- **102/102 unit tests passing** — up from 24 after 7 hardening PRs
 - 2 obfs4 bridges verified working
-- Self-healing watchdog: health check, auto-restart, circuit rotation — all tested
+- Self-healing watchdog: layered health check (process + SOCKS5 + bootstrap + route), auto-restart, circuit rotation
 - Cross-platform daemon code (Windows + Linux)
-- Zero secrets in repo (verified by grep scan across all commits)
+- Zero secrets in repo (verified by grep scan + centralized redaction module)
+- Gateway uses dedicated `~/.hermes/tor/gateway.env` — never rewrites credential-bearing `~/.hermes/.env`
+- Bridge rotation hardened: all-or-nothing validation, atomic private writes, no bridge lines in logs
 
 ---
 
@@ -278,7 +288,7 @@ Step 3: Hermes gateway inherits ALL_PROXY
 OpenAI, Anthropic, and their CDNs (Cloudflare, AWS WAF) block Tor exit nodes ([Cloudflare Bot Management](https://www.cloudflare.com/products/bot-management/)). Expected: HTTP 403, 429, or CAPTCHA.
 
 **Mitigations:**
-- `TOR_SKIP_LLM=1` — LLM calls bypass Tor while platform traffic stays protected
+- Direct LLM routing — non-strict only, per-provider opt-in, with a critical audit event
 - VPN → Tor → LLM — provider sees VPN IP, not Tor exit IP
 - Tor-friendly providers — OpenRouter, local models, some open-source endpoints
 
@@ -291,11 +301,11 @@ OpenAI, Anthropic, and their CDNs (Cloudflare, AWS WAF) block Tor exit nodes ([C
 | Tor (obfs4 bridges) | +450-1800ms |
 | VPN → Tor | +550-2300ms |
 
-Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use `TOR_SKIP_LLM=1` for streaming chat.
+Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use an explicitly approved request-scoped direct transport in non-strict mode for streaming chat.
 
 ### execute_code System Binary Leaks
 
-`ALL_PROXY` is a convention, not enforcement. `git`, `curl`, `pip`, compiled tools use the raw network stack. Linux: `torsocks curl ...` (LD_PRELOAD). Windows: no equivalent — use `execute_code` + `proxy_http` instead.
+`ALL_PROXY` is a convention, not enforcement. `git`, `curl`, `pip`, and compiled tools may use the raw network stack. Strict mode therefore denies the `execute_code` child at its launch boundary; use audited Hermes HTTP tools backed by `proxy_http` instead. Outside strict mode, Linux users may explicitly run `torsocks curl ...` (LD_PRELOAD); Windows has no equivalent.
 
 ---
 
@@ -303,9 +313,9 @@ Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use `T
 
 ### Protocol-Level Limitations (Cannot Be Fixed)
 
-1. **SOCKS5 is TCP-only.** Discord voice (UDP), WebRTC, DNS-over-UDP, and any UDP-based protocol cannot be proxied through the Tor SOCKS5 interface. Voice and video will always leak. See RFC 1928 §3-4.
+1. **SOCKS5 is TCP-only.** Discord voice (UDP), WebRTC, DNS-over-UDP, and any UDP-based protocol cannot be proxied through the Tor SOCKS5 interface. In strict mode these unsupported channels fail before socket creation rather than leaking. See RFC 1928 §3-4.
 
-2. **Raw socket protocols are uncovered.** SMTP (port 25/587), IMAP (port 993), and IRC (port 6667/6697) use Python's `smtplib`, `imaplib`, and `irc` libraries — none of which support SOCKS5. Email and IRC adapters cannot route through Tor without replacing their underlying transport libraries.
+2. **Raw socket protocols cannot be routed.** SMTP (port 25/587), IMAP (port 993), and IRC (port 6667/6697) use libraries without SOCKS5 support. Strict mode denies these adapters before their libraries create a socket.
 
 3. **API key deanonymizes regardless of IP.** The LLM API key in request headers identifies your account. Tor hides your IP but not your account. For true anonymity at the API level, you would need anonymous payment methods and provider accounts not tied to real identity.
 
@@ -323,19 +333,19 @@ Streaming TTFT spikes noticeably. Batch workloads are minimally affected. Use `T
 
 9. **No circuit isolation between subagents.** All subagents share the same Tor circuit (same SOCKS5 port). An adversary who compromises one subagent can potentially correlate traffic with other subagents. Stem's ControlPort interface could assign different SOCKS5 credentials to different circuits — this is not yet implemented.
 
-10. **Slack cannot use SOCKS5.** The Slack Python SDK's `client.proxy` parameter only accepts `http://` URLs. SOCKS5 is silently rejected. The workaround (privoxy HTTP→SOCKS5 proxy) adds another process and failure mode.
+10. **Slack cannot use SOCKS5.** The Slack Python SDK's `client.proxy` parameter only accepts `http://` URLs. Strict mode rejects Slack before client construction when the resolved proxy is SOCKS5 or missing. The workaround (privoxy HTTP→SOCKS5 proxy) adds another process and failure mode.
 
-11. **Windows has no `torsocks` equivalent.** On Linux, `torsocks` can force any binary through Tor via `LD_PRELOAD`. On Windows, no equivalent exists. System binary calls from `execute_code` blocks will always bypass Tor on Windows.
+11. **Native child proxy behavior is not inferable.** On Linux, `torsocks` can force a binary through Tor via `LD_PRELOAD`; Windows has no equivalent. Strict mode denies `execute_code`, unverified stdio MCP servers, and other network-capable children before launch rather than trusting ambient proxy variables.
 
 12. **Gateway restart during Tor outage may leave stale ALL_PROXY in .env.** If the gateway crashes and the supervisor restarts it while Tor is also dead, `.env` contains `ALL_PROXY=socks5://127.0.0.1:9050` pointing to a dead port. The `TOR_HEALTH` flag mitigates this but the window between crash and watchdog detection is up to 15 seconds.
 
-13. **No system-level transparent proxy.** All Tor routing is opt-in at the application layer (Python HTTP clients). A process that ignores proxy environment variables — such as a native binary spawned by a platform adapter — will bypass Tor silently. A system-level transparent proxy (iptables/nftables on Linux, no equivalent on Windows) would close this gap.
+13. **No system-level transparent proxy.** Enforcement is at audited application entry points rather than the kernel. Audited unknown channels and non-proxy-aware child processes are denied, but the policy does not globally intercept missing wiring in uninstrumented third-party code; a system-level transparent proxy remains useful as defense in depth.
 
 ### Operational Limitations
 
 14. **Exit nodes are unpredictable.** Tor exit nodes vary in bandwidth, latency, and geo-location. Some exit nodes are blacklisted by CDNs more aggressively than others. There is no mechanism to prefer "AI-friendly" exit nodes.
 
-15. **Bridge availability is not guaranteed.** @GetBridgesBot may rate-limit or go offline. BridgeDB may return bridges that are already blocked in certain regions. The daily cron job mitigates but cannot guarantee availability.
+15. **Bridge availability and automated freshness are not guaranteed.** @GetBridgesBot may rate-limit or go offline, and BridgeDB may return bridges that are already blocked in certain regions. Automated acquisition also reveals the requester's network and request timing to BridgeDB, which can create correlation metadata. The public web flow may require an interactive challenge, so daily freshness must not be assumed without an authenticated, supported BridgeDB automation workflow.
 
 16. **Tor network congestion can degrade to unusability.** During high-load events (DDoS attacks, network-wide censorship events), Tor circuit construction can take minutes or fail entirely. The watchdog will retry but cannot force the network to work.
 

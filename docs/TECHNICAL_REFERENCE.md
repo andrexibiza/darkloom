@@ -389,7 +389,7 @@ Traditional security documentation lists mitigations. This module makes the audi
 
 **Cross-platform hardening**: POSIX uses `st_uid` and `st_mode` bits. Windows uses PowerShell `Get-Acl` + `Set-Acl` with SDDL strings for owner-only ACEs. All Windows checks are best-effort (catch `CalledProcessError` for ephemeral temp paths).
 
-Used by: `bridges.py` (load/save bridges), `daemon.py` (write torrc), `gateway.py` (write gateway.env).
+Used by: `bridges.py` (load/save bridges), `daemon.py` (write torrc), `gateway.py` (update `~/.hermes/.env`).
 
 ---
 

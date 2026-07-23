@@ -353,7 +353,7 @@ The [`healthy`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_t
 
 **The baseline:** Every agent framework stores its configuration files with default permissions. Bridge files, torrc, API keys — all readable by any process on the system. There is no advisory locking. There is no atomic write. Concurrent processes can read secrets, corrupt configs, or intercept writes. The credential-bearing `.env` file — containing every API key the agent uses — is rewritten in-place to add proxy variables. A single bug in the parser could expose or corrupt every credential.
 
-After PR #12: [`secure_files.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py) — [`private_directory()`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py) (0700), symlink rejection, cross-platform owner validation. [`private_lock()`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py) — `fcntl.flock(LOCK_EX)` / `msvcrt.locking(LK_LOCK)`. [`atomic_private_write()`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py) — tempfile → chmod 0600 → flush → fsync → `os.replace` → fsync parent. Gateway config moved to dedicated `~/.hermes/tor/gateway.env` — never touches the credential-bearing `.env`. The gap from baseline: the difference between "secrets in world-readable files, API keys next to proxy settings in one mutable file" and "every sensitive file atomically written with owner-only permissions, advisory locking, and dedicated storage."
+After PR #12: [`secure_files.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py) — [`private_directory()`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py) (0700), symlink rejection, cross-platform owner validation. [`private_lock()`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py) — `fcntl.flock(LOCK_EX)` / `msvcrt.locking(LK_LOCK)`. [`atomic_private_write()`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py) — tempfile → chmod 0600 → flush → fsync → `os.replace` → fsync parent. Gateway config updates the Hermes-loaded `~/.hermes/.env` atomically while retaining credentials and comments. The gap from baseline: the difference between "secrets in world-readable files" and "every sensitive file atomically written with owner-only permissions and advisory locking."
 
 ### PR #13 — Centralized Redaction
 
@@ -477,7 +477,7 @@ All hardening is always-on. No strict mode toggle. Every documented-leaky channe
 
 ### 9.4 `secure_files.py` — Race-Resistant Private File Operations
 
-[Source](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py). Cross-platform: POSIX `fcntl.flock`, Windows `msvcrt.locking`. Bridges, torrc, and gateway.env all use this infrastructure.
+[Source](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/secure_files.py). Cross-platform: POSIX `fcntl.flock`, Windows `msvcrt.locking`. Bridges, torrc, and gateway `.env` updates all use this infrastructure.
 
 ### 9.5 `verifier.py` — TLS-Validating Route Verification
 

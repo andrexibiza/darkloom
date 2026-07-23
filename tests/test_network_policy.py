@@ -107,20 +107,7 @@ def test_gateway_wrapper_refuses_non_proxy_aware_launch(monkeypatch):
         authorize_subprocess(proxy_aware=False)
 
 
-def test_gateway_command_must_be_verified_as_hermes_launcher(monkeypatch, tmp_path):
-    from hermes_tor.gateway import _is_proxy_aware_gateway_command
 
-    native = tmp_path / "native-helper"
-    native.write_bytes(b"\x7fELF ignores proxy variables")
-    native.chmod(0o755)
-    monkeypatch.setenv("PATH", str(tmp_path))
-    assert not _is_proxy_aware_gateway_command(["native-helper", "gateway", "run"])
-
-    launcher = tmp_path / "hermes"
-    launcher.write_text("from hermes_cli.main import main\nmain()\n")
-    launcher.chmod(0o755)
-    assert _is_proxy_aware_gateway_command(["hermes", "gateway", "run"])
-    assert not _is_proxy_aware_gateway_command(["hermes", "chat"])
 
 
 def test_hermes_patch_guards_every_declared_network_entry_point():

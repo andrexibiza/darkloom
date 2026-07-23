@@ -1,4 +1,4 @@
-"""hermes-tor — Micro-TOR client for Hermes agents.
+"""darkloom — Micro-TOR client for Hermes agents.
 
 Route Hermes agent and subagent tool-level network traffic
 through the Tor network using bridges for anonymity.
@@ -18,7 +18,7 @@ Modules:
 
 __version__ = "0.1.0"
 
-from hermes_tor.policy import (  # noqa: E402
+from darkloom.policy import (  # noqa: E402
     NetworkChannel,
     NetworkPolicyError,
     authorize,

@@ -32,11 +32,11 @@ Hermes already has a centralized proxy resolver at `gateway/platforms/base.py`. 
 
 ## Setup
 
-### 1. Install hermes-tor
+### 1. Install darkloom
 
 ```bash
-git clone https://github.com/andrexibiza/hermes-tor.git
-cd hermes-tor
+git clone https://github.com/andrexibiza/darkloom.git
+cd darkloom
 uv sync --extra mcp
 uv pip install -e .
 ```
@@ -57,7 +57,7 @@ Save them to `~/.hermes/tor/bridges.txt` (one per line), or use the `tor_add_bri
 ### 3. Download Tor
 
 ```bash
-python -c "from hermes_tor.downloader import download_tor_binary; download_tor_binary()"
+python -c "from darkloom.downloader import download_tor_binary; download_tor_binary()"
 ```
 
 Downloads ~22MB (Windows) or ~32MB (Linux). One-time.
@@ -66,11 +66,11 @@ Downloads ~22MB (Windows) or ~32MB (Linux). One-time.
 
 ```bash
 # Start Tor, inject ALL_PROXY, then launch gateway
-python -m hermes_tor.gateway --timeout 90 -- hermes gateway run
+python -m darkloom.gateway --timeout 90 -- hermes gateway run
 
 # Or start Tor first, then gateway separately:
 python -c "
-from hermes_tor.gateway import start_tor_for_gateway
+from darkloom.gateway import start_tor_for_gateway
 mgr = start_tor_for_gateway()
 # Tor is running, ALL_PROXY is set, gateway will auto-route
 "
@@ -83,7 +83,7 @@ hermes gateway run
 python -c "
 import os
 os.environ['TOR_ENABLED'] = '1'
-from hermes_tor.proxy_http import check_tor_connection
+from darkloom.proxy_http import check_tor_connection
 print(check_tor_connection())
 "
 # Expected: {'tor_available': True, 'using_tor': True, 'exit_ip': '185.220.x.x'}
@@ -111,7 +111,7 @@ print(check_tor_connection())
 Register the MCP server:
 
 ```bash
-hermes mcp add hermes-tor --command "uv" --args "run" --args "--directory" --args "/path/to/hermes-tor" --args "python" --args "-m" --args "hermes_tor.mcp_server"
+hermes mcp add darkloom --command "uv" --args "run" --args "--directory" --args "/path/to/darkloom" --args "python" --args "-m" --args "darkloom.mcp_server"
 ```
 
 | Tool | Description |
@@ -128,7 +128,7 @@ hermes mcp add hermes-tor --command "uv" --args "run" --args "--directory" --arg
 ### Gateway with Tor (All Platforms)
 
 ```bash
-python -m hermes_tor.gateway -- hermes gateway run
+python -m darkloom.gateway -- hermes gateway run
 ```
 
 ### execute_code with Tor
@@ -137,7 +137,7 @@ python -m hermes_tor.gateway -- hermes gateway run
 import os
 os.environ["TOR_ENABLED"] = "1"
 
-from hermes_tor.proxy_http import tor_get, tor_post, check_tor_connection
+from darkloom.proxy_http import tor_get, tor_post, check_tor_connection
 
 # Verify
 status = check_tor_connection()
@@ -153,7 +153,7 @@ data = tor_post("https://api.example.com/data", json={"key": "value"})
 Subagents run in ThreadPoolExecutor threads — they inherit `os.environ` automatically.
 
 ```python
-from hermes_tor.gateway import inject_gateway_env
+from darkloom.gateway import inject_gateway_env
 
 # Before spawning subagents:
 inject_gateway_env()  # ALL_PROXY + HTTPS_PROXY + HTTP_PROXY + TOR_ENABLED
@@ -258,7 +258,7 @@ To survive gateway restarts, write config to `~/.hermes/.env`:
 
 ```bash
 python -c "
-from hermes_tor.gateway import start_tor_for_gateway
+from darkloom.gateway import start_tor_for_gateway
 mgr = start_tor_for_gateway(write_env=True)
 print('Tor running, ALL_PROXY saved to ~/.hermes/.env')
 "
@@ -270,7 +270,7 @@ To remove Tor routing from `.env`:
 
 ```bash
 python -c "
-from hermes_tor.gateway import remove_gateway_env_file
+from darkloom.gateway import remove_gateway_env_file
 remove_gateway_env_file()
 "
 ```
@@ -284,7 +284,7 @@ OpenAI, Anthropic, and their API gateways (Cloudflare, AWS WAF) aggressively blo
 **Solution:** Strict mode always routes LLM requests through Tor. In non-strict mode, construct a request-scoped client with `create_llm_client()`; direct routing requires a deliberate per-provider policy and produces a critical security audit event. This never changes the gateway proxy environment.
 
 ```python
-from hermes_tor.gateway import create_llm_client, LLMProviderPolicy, LLMRoute
+from darkloom.gateway import create_llm_client, LLMProviderPolicy, LLMRoute
 client = create_llm_client("example", LLMRoute.DIRECT, {"example": LLMProviderPolicy(allow_direct=True)})
 ```
 
@@ -324,7 +324,7 @@ mv ~/.hermes/tor/bridges.txt.bak ~/.hermes/tor/bridges.txt
 3. Test with `proxy_http`:
 ```python
 import os; os.environ['TOR_ENABLED'] = '1'
-from hermes_tor.proxy_http import check_tor_connection
+from darkloom.proxy_http import check_tor_connection
 print(check_tor_connection())
 ```
 
@@ -393,7 +393,7 @@ iptables -A OUTPUT -j DROP                            # Block everything else
 | LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — use audited request-scoped routing for streaming, Tor for batch |
 
 **`TOR_STRICT_MODE` guarantee:** Set `TOR_STRICT_MODE=1` (or call
-`hermes_tor.enable_strict_mode()`) to activate the centralized, default-deny
+`darkloom.enable_strict_mode()`) to activate the centralized, default-deny
 policy. Wired clients must identify an explicitly allowed channel and provide a
 valid proxy before creating a client, socket, or network-capable child process.
 UDP voice, direct SMTP/IMAP, IRC, raw-socket adapters, unknown future channels,
@@ -405,7 +405,7 @@ explicit direct capabilities. From a Hermes Agent checkout at commit
 `patches/0004-central-network-policy-fail-closed.patch`. Verify both with
 `git apply --check` before applying them; patch 0004 is intentionally based on
 the proxy wiring installed by patch 0003.
-Full audit: `python -m hermes_tor.hardening audit`
+Full audit: `python -m darkloom.hardening audit`
 
 ## Reference
 
@@ -413,4 +413,4 @@ Full audit: `python -m hermes_tor.hardening audit`
 - BridgeDB: https://bridges.torproject.org
 - Tor Metrics (exit node list): https://metrics.torproject.org
 - check.torproject.org: https://check.torproject.org
-- hermes-tor repo: https://github.com/andrexibiza/hermes-tor
+- darkloom repo: https://github.com/andrexibiza/darkloom

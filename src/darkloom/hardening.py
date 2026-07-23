@@ -8,7 +8,7 @@ Leaks are categorized:
   MITIGATED — partial fix, residual risk documented
   DOCUMENTED — protocol limitation, cannot fix, documented with workaround
 
-Run: python -m hermes_tor.hardening audit
+Run: python -m darkloom.hardening audit
 """
 
 import hashlib
@@ -252,7 +252,7 @@ register(
     "wrapper refuses to launch the gateway. TOR_HEALTH=ok is written only after "
     "that check, and clear_gateway_env() removes it.",
     "Verify: kill Tor process, restart gateway — should refuse to connect",
-    "hermes_tor/gateway.py"
+    "darkloom/gateway.py"
 )
 
 register(
@@ -322,7 +322,7 @@ register(
     "None make network calls at import time. All use lazy initialization. "
     "Smaller adapters may vary and remain a documented risk. The gateway wrapper "
     "must be started before importing or initializing platform adapters.",
-    "Verify: launch through hermes_tor.gateway and check for pre-proxy connections",
+    "Verify: launch through darkloom.gateway and check for pre-proxy connections",
     "All platform adapters (documentation)"
 )
 
@@ -342,7 +342,7 @@ register(
     "providers that don't block Tor (local models, some open-source endpoints) "
     "or route through a non-exit-node SOCKS5 proxy chain.",
     "Verify: direct routing is rejected unless the provider policy opts in",
-    "hermes_tor/gateway.py, SKILL.md"
+    "darkloom/gateway.py, SKILL.md"
 )
 
 register(
@@ -385,7 +385,7 @@ register(
 
 # ═══════════════════════════════════════════════════════════════
 def load_manifest() -> dict:
-    path = files("hermes_tor").joinpath("compatibility-manifest.json")
+    path = files("darkloom").joinpath("compatibility-manifest.json")
     return json.loads(path.read_text(encoding="utf-8"))
 
 
@@ -399,7 +399,7 @@ def _controls(manifest: dict) -> list[Control]:
 
 
 def find_hermes_root(explicit: Path | str | None = None) -> Path | None:
-    """Find Hermes without treating the hermes-tor repository as Hermes."""
+    """Find Hermes without treating the darkloom repository as Hermes."""
     candidates = [explicit, os.environ.get("HERMES_HOME"), Path.cwd()]
     for candidate in candidates:
         if not candidate:
@@ -437,7 +437,7 @@ def verify_compatibility(
     """Compare the installed Hermes revision and files to the signed-off manifest.
 
     A matching file set is MITIGATED, not VERIFIED.  VERIFIED requires a named
-    runtime probe from the embedding application; hermes-tor never infers network
+    runtime probe from the embedding application; darkloom never infers network
     behaviour from configuration alone.
     """
     manifest = load_manifest()
@@ -590,7 +590,7 @@ def inject_subprocess_proxy_env(env_dict: dict[str, str]) -> dict[str, str]:
 def enable_strict_mode():
     """Enable TOR_STRICT_MODE for integrations that explicitly enforce it.
 
-    The hermes-tor gateway wrapper always verifies that its Tor SOCKS listener
+    The darkloom gateway wrapper always verifies that its Tor SOCKS listener
     is reachable before launching the gateway. External Hermes adapters do not
     currently consume this setting, so callers must not treat it as a blanket
     block for Discord voice, Email, IRC, or other direct network clients.

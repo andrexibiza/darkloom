@@ -4,8 +4,8 @@ import ipaddress
 from dataclasses import dataclass, field
 
 import httpx
-from hermes_tor.policy import NetworkChannel, authorize
-from hermes_tor.privacy import get_logger
+from darkloom.policy import NetworkChannel, authorize
+from darkloom.privacy import get_logger
 
 logger = get_logger(__name__)
 DEFAULT_CHECK_ENDPOINTS = (

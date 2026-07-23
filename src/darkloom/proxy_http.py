@@ -9,11 +9,11 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlsplit
 
-from hermes_tor.privacy import get_logger
+from darkloom.privacy import get_logger
 
 import httpx
 
-from hermes_tor.policy import NetworkChannel, authorize
+from darkloom.policy import NetworkChannel, authorize
 
 logger = get_logger(__name__)
 

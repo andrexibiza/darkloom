@@ -55,6 +55,6 @@ Six upstream files are updated with no breaking changes. External traffic is con
 
 ## Related
 
-- hermes-tor package: https://github.com/andrexibiza/hermes-tor
-- Adversarial hardening audit: `python -m hermes_tor.hardening audit`
+- darkloom package: https://github.com/andrexibiza/darkloom
+- Adversarial hardening audit: `python -m darkloom.hardening audit`
 - Full architecture docs: `docs/PROXY_ARCHITECTURE.md`

@@ -4,7 +4,7 @@ import httpx
 
 
 SOCKS_SUPPORT_ERROR = (
-    "SOCKS transport unavailable; install hermes-tor with its declared "
+    "SOCKS transport unavailable; install darkloom with its declared "
     "httpx[socks] dependency. Direct fallback is disabled."
 )
 

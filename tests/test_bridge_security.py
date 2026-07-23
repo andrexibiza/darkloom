@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from hermes_tor.bridges import MAX_BRIDGE_LINE_LENGTH, parse_bridge_line
+from darkloom.bridges import MAX_BRIDGE_LINE_LENGTH, parse_bridge_line
 
 
 FP = "0123456789ABCDEF0123456789ABCDEF01234567"
@@ -32,7 +32,7 @@ def test_adversarial_bridge_lines_are_rejected(line):
 
 
 def test_manager_rejection_does_not_change_memory_or_disk(tmp_path, monkeypatch):
-    import hermes_tor.manager as manager_module
+    import darkloom.manager as manager_module
 
     path = tmp_path / "bridges.txt"
     monkeypatch.setattr(manager_module, "BRIDGES_PATH", path)
@@ -45,8 +45,8 @@ def test_manager_rejection_does_not_change_memory_or_disk(tmp_path, monkeypatch)
 
 
 def test_mcp_reports_bridge_rejection(monkeypatch):
-    import hermes_tor.mcp_server as mcp
-    from hermes_tor.manager import AddBridgeResult
+    import darkloom.mcp_server as mcp
+    from darkloom.manager import AddBridgeResult
 
     class Manager:
         def add_bridge(self, line):

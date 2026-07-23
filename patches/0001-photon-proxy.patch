@@ -1,4 +1,4 @@
-From: hermes-tor integration
+From: darkloom integration
 Subject: [PATCH] photon: route HTTP clients through gateway proxy resolver
 
 Photon adapter creates httpx.AsyncClient instances without consulting
@@ -10,7 +10,7 @@ in the Photon adapter, using the PHOTON_PROXY env var (with fallback
 to ALL_PROXY/HTTPS_PROXY/HTTP_PROXY).
 
 Fixes: photon adapter bypassing gateway-level Tor proxy
-Related: hermes-tor gateway integration
+Related: darkloom gateway integration
 ---
  plugins/platforms/photon/adapter.py | 22 +++++++++++++++-------
  1 file changed, 15 insertions(+), 7 deletions(-)

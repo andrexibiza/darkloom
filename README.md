@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/references-46%20sources-blueviolet" alt="46 cited sources">
 </p>
 
-# hermes-tor
+# darkloom
 
 ## Cryptographic Harness for Uncensorable AI Agent Communication
 
@@ -63,15 +63,15 @@ If you're going to build agents that the balkanizers can't touch, you need to kn
 ## Quick Start
 
 ```bash
-git clone https://github.com/andrexibiza/hermes-tor.git
-cd hermes-tor
+git clone https://github.com/andrexibiza/darkloom.git
+cd darkloom
 uv sync --extra mcp
 
 # Get bridges from @GetBridgesBot on Telegram → save to ~/.hermes/tor/bridges.txt
-python -m hermes_tor.gateway -- hermes gateway run
+python -m darkloom.gateway -- hermes gateway run
 
 # Verify
-python -c "import os; os.environ['TOR_ENABLED']='1'; from hermes_tor.proxy_http import check_tor_connection; print(check_tor_connection())"
+python -c "import os; os.environ['TOR_ENABLED']='1'; from darkloom.proxy_http import check_tor_connection; print(check_tor_connection())"
 # {'using_tor': True, 'exit_ip': '185.220.x.x'}
 ```
 
@@ -108,32 +108,32 @@ flowchart TD
     C --> S[Raft · API Server · Webhooks]
 ```
 
-Hermes already shipped with a complete SOCKS5 proxy system — [`resolve_proxy_url()`](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L357) in `gateway/platforms/base.py` checks `ALL_PROXY`, `HTTPS_PROXY`, and platform-specific vars across all [23 messaging adapters](https://github.com/NousResearch/hermes-agent/tree/main/plugins/platforms). The missing piece was the Tor daemon running and the env var set. This package downloads the [Tor Expert Bundle](https://www.torproject.org/download/tor/), configures obfs4 bridges through [lyrebird](https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird), boots the daemon, injects `ALL_PROXY=socks5://127.0.0.1:9050`, and starts a [self-healing watchdog](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L199) that monitors health every 15 seconds and rotates circuits every 10 minutes via the [Tor ControlPort](https://github.com/torproject/torspec/blob/main/control-spec.txt) NEWNYM signal. Adapters that cannot use SOCKS5 directly (raw socket protocols) are denied at the [policy layer](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) before socket creation — fail-closed, not unsupported.
+Hermes already shipped with a complete SOCKS5 proxy system — [`resolve_proxy_url()`](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L357) in `gateway/platforms/base.py` checks `ALL_PROXY`, `HTTPS_PROXY`, and platform-specific vars across all [23 messaging adapters](https://github.com/NousResearch/hermes-agent/tree/main/plugins/platforms). The missing piece was the Tor daemon running and the env var set. This package downloads the [Tor Expert Bundle](https://www.torproject.org/download/tor/), configures obfs4 bridges through [lyrebird](https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird), boots the daemon, injects `ALL_PROXY=socks5://127.0.0.1:9050`, and starts a [self-healing watchdog](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/gateway.py#L199) that monitors health every 15 seconds and rotates circuits every 10 minutes via the [Tor ControlPort](https://github.com/torproject/torspec/blob/main/control-spec.txt) NEWNYM signal. Adapters that cannot use SOCKS5 directly (raw socket protocols) are denied at the [policy layer](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/policy.py) before socket creation — fail-closed, not unsupported.
 
 ---
 
 ## Hardening: 17 Leaks Audited
 
-An adversarial code review traced every outbound connection path — every subprocess spawn, every HTTP client creation, every WebSocket upgrade, every gRPC stream. Full audit: `python -m hermes_tor.hardening audit`.
+An adversarial code review traced every outbound connection path — every subprocess spawn, every HTTP client creation, every WebSocket upgrade, every gRPC stream. Full audit: `python -m darkloom.hardening audit`.
 
 | Leak | Status | Description |
 |------|--------|-------------|
-| LEAK-01 | ✅ FIXED | WhatsApp bridge subprocess — `ALL_PROXY` now injected into Node.js bridge env [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/patches/0002-whatsapp-proxy.patch) |
-| LEAK-02 | ⚠️ MITIGATED | Photon sidecar binary — `ALL_PROXY`/`GRPC_PROXY` injected; depends on Go binary [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/patches/0001-photon-proxy.patch) |
-| LEAK-03 | ✅ FIXED | Browser tool — `--proxy-server=socks5://` passed to Chromium via agent-browser [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/patches/0003-harden-tor-proxy-all-platforms.patch) |
-| LEAK-04 | ✅ FIXED | Web tools SDK — `proxy=` passed to Firecrawl client constructor [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/patches/0003-harden-tor-proxy-all-platforms.patch) |
+| LEAK-01 | ✅ FIXED | WhatsApp bridge subprocess — `ALL_PROXY` now injected into Node.js bridge env [[source]](https://github.com/andrexibiza/darkloom/blob/main/patches/0002-whatsapp-proxy.patch) |
+| LEAK-02 | ⚠️ MITIGATED | Photon sidecar binary — `ALL_PROXY`/`GRPC_PROXY` injected; depends on Go binary [[source]](https://github.com/andrexibiza/darkloom/blob/main/patches/0001-photon-proxy.patch) |
+| LEAK-03 | ✅ FIXED | Browser tool — `--proxy-server=socks5://` passed to Chromium via agent-browser [[source]](https://github.com/andrexibiza/darkloom/blob/main/patches/0003-harden-tor-proxy-all-platforms.patch) |
+| LEAK-04 | ✅ FIXED | Web tools SDK — `proxy=` passed to Firecrawl client constructor [[source]](https://github.com/andrexibiza/darkloom/blob/main/patches/0003-harden-tor-proxy-all-platforms.patch) |
 | LEAK-05 | ✅ FIXED | LLM API calls — verified [OpenAI SDK](https://github.com/openai/openai-python) routes SOCKS5 via [httpx](https://www.python-httpx.org/) + [socksio](https://github.com/sethmlarson/socksio) |
 | LEAK-06 | ✅ FIXED | WebSocket persistence — verified [aiohttp_socks](https://github.com/romis2012/aiohttp-socks) ProxyConnector handles full lifecycle |
 | LEAK-07 | ✅ FIXED | DNS leak — verified `rdns=True` on all 4 aiohttp connector sites [[aiohttp_socks DNS docs]](https://github.com/romis2012/aiohttp-socks#dns) |
-| LEAK-08 | ✅ FIXED | Slack SOCKS5 rejection — elevated to WARNING with privoxy workaround [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/patches/0003-harden-tor-proxy-all-platforms.patch) |
-| LEAK-09 | ✅ FIXED | Gateway restart race — `TOR_HEALTH` flag prevents startup on dead proxy [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L196) |
+| LEAK-08 | ✅ FIXED | Slack SOCKS5 rejection — elevated to WARNING with privoxy workaround [[source]](https://github.com/andrexibiza/darkloom/blob/main/patches/0003-harden-tor-proxy-all-platforms.patch) |
+| LEAK-09 | ✅ FIXED | Gateway restart race — `TOR_HEALTH` flag prevents startup on dead proxy [[source]](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/gateway.py#L196) |
 | LEAK-10 | ✅ FIXED | Platform var override — warns when empty `DISCORD_PROXY=` overrides `ALL_PROXY` [[source]](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L380) |
-| LEAK-11 | ✅ FIXED | Discord voice UDP — SOCKS5 protocol limitation (TCP only); strict mode blocks `UDP_VOICE` before socket creation [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
-| LEAK-12 | ✅ FIXED | Email SMTP/IMAP — Python smtplib/imaplib don't support SOCKS5; strict mode blocks `SMTP`/`IMAP` channels [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
-| LEAK-13 | ✅ FIXED | IRC — raw TCP sockets; strict mode blocks `IRC` channel [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
+| LEAK-11 | ✅ FIXED | Discord voice UDP — SOCKS5 protocol limitation (TCP only); strict mode blocks `UDP_VOICE` before socket creation [[source]](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/policy.py) |
+| LEAK-12 | ✅ FIXED | Email SMTP/IMAP — Python smtplib/imaplib don't support SOCKS5; strict mode blocks `SMTP`/`IMAP` channels [[source]](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/policy.py) |
+| LEAK-13 | ✅ FIXED | IRC — raw TCP sockets; strict mode blocks `IRC` channel [[source]](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/policy.py) |
 | LEAK-14 | ✅ FIXED | Import-time network calls — audited, no leaks in major adapters; strict mode audit verified |
-| LEAK-15 | ✅ FIXED | LLM exit node hostility — `skip_llm_proxy()` + per-provider direct-routing policy in non-strict mode [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py#L290) |
-| LEAK-16 | ✅ FIXED | execute_code system binary leaks — `authorize_subprocess()` denies non-proxy-aware children in strict mode [[source]](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/policy.py) |
+| LEAK-15 | ✅ FIXED | LLM exit node hostility — `skip_llm_proxy()` + per-provider direct-routing policy in non-strict mode [[source]](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/gateway.py#L290) |
+| LEAK-16 | ✅ FIXED | execute_code system binary leaks — `authorize_subprocess()` denies non-proxy-aware children in strict mode [[source]](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/policy.py) |
 | LEAK-17 | 📄 DOCUMENTED | Tor latency (500ms-2s TTFT) — inherent to onion routing; not a code fix [[Tor Metrics]](https://metrics.torproject.org/) |
 
 All hardening is always-on. Every documented-leaky channel is blocked at the policy layer before socket creation. Gateway refuses to start if layered health check fails.
@@ -188,7 +188,7 @@ The Tor Project consolidated all pluggable transports into [lyrebird](https://gi
 
 ## Self-Healing Topology
 
-The `TorWatchdog` (source: [`src/hermes_tor/gateway.py`](https://github.com/andrexibiza/hermes-tor/blob/main/src/hermes_tor/gateway.py) lines 199-360) is a background daemon thread implementing three recovery mechanisms with layered health verification:
+The `TorWatchdog` (source: [`src/darkloom/gateway.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/gateway.py) lines 199-360) is a background daemon thread implementing three recovery mechanisms with layered health verification:
 
 | Mechanism | Interval | Action |
 |-----------|----------|--------|
@@ -220,7 +220,7 @@ resolve_proxy_url(platform_env_var, target_hosts):
 
 ## MCP Tools
 
-Register: `hermes mcp add hermes-tor --command "uv" --args "run" --args "--directory" --args "/path/to/hermes-tor" --args "python" --args "-m" --args "hermes_tor.mcp_server"`
+Register: `hermes mcp add darkloom --command "uv" --args "run" --args "--directory" --args "/path/to/darkloom" --args "python" --args "-m" --args "darkloom.mcp_server"`
 
 | Tool | Description |
 |------|-------------|
@@ -239,17 +239,17 @@ Agents monitor their own network health: `tor_verify` → if down → `tor_statu
 
 ```python
 # Subagents inherit Tor automatically (ThreadPoolExecutor threads share os.environ)
-from hermes_tor.gateway import inject_gateway_env
+from darkloom.gateway import inject_gateway_env
 inject_gateway_env()  # ALL_PROXY + HTTPS_PROXY + HTTP_PROXY + TOR_ENABLED
 # delegate_task(...) — subagent routes through Tor
 
 # execute_code blocks — explicit SOCKS5 transport
 import os; os.environ['TOR_ENABLED'] = '1'
-from hermes_tor.proxy_http import tor_get, tor_post
+from darkloom.proxy_http import tor_get, tor_post
 data = tor_get("https://httpbin.org/ip")
 
 # LLM clients use verified explicit SOCKS5 transports
-from hermes_tor.gateway import create_httpx_client, ProxyPolicy
+from darkloom.gateway import create_httpx_client, ProxyPolicy
 policy = ProxyPolicy("socks5://127.0.0.1:9050", strict=True)
 client = create_httpx_client(policy=policy, asynchronous=False)
 ```
@@ -514,7 +514,7 @@ WhiskeySockets. (n.d.). *Baileys: Lightweight full-featured WhatsApp Web + Multi
 
 ## Provenance
 
-Every claim in this document links to its primary source. The source code is at [`src/hermes_tor/`](https://github.com/andrexibiza/hermes-tor/tree/main/src/hermes_tor). 24 tests at [`tests/`](https://github.com/andrexibiza/hermes-tor/blob/main/tests/test_hermes_tor.py). Three patch files at [`patches/`](https://github.com/andrexibiza/hermes-tor/tree/main/patches) for Hermes-agent core. 11 auditable commits in the [commit history](https://github.com/andrexibiza/hermes-tor/commits/main). The hardening audit runs with `python -m hermes_tor.hardening audit`. The Hermes-agent source lines verified are linked inline above. Tested end-to-end on Windows 10: Tor 15.0.19 bootstrapped in 4.5s, `check.torproject.org` confirmed routing through Tor with exit IP `185.220.101.6`.
+Every claim in this document links to its primary source. The source code is at [`src/darkloom/`](https://github.com/andrexibiza/darkloom/tree/main/src/darkloom). 24 tests at [`tests/`](https://github.com/andrexibiza/darkloom/blob/main/tests/test_darkloom.py). Three patch files at [`patches/`](https://github.com/andrexibiza/darkloom/tree/main/patches) for Hermes-agent core. 11 auditable commits in the [commit history](https://github.com/andrexibiza/darkloom/commits/main). The hardening audit runs with `python -m darkloom.hardening audit`. The Hermes-agent source lines verified are linked inline above. Tested end-to-end on Windows 10: Tor 15.0.19 bootstrapped in 4.5s, `check.torproject.org` confirmed routing through Tor with exit IP `185.220.101.6`.
 
 ---
 

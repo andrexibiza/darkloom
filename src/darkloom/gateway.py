@@ -1,6 +1,6 @@
 """Hermes gateway integration — Tor lifecycle + proxy injection.
 
-This module bridges hermes-tor with the Hermes messaging gateway.
+This module bridges darkloom with the Hermes messaging gateway.
 The gateway already has a centralized proxy resolver at
 gateway.platforms.base.resolve_proxy_url() that checks:
   1. Platform-specific env var (TELEGRAM_PROXY, DISCORD_PROXY, etc.)
@@ -12,7 +12,7 @@ every platform adapter that calls resolve_proxy_url() automatically
 routes through Tor.
 
 Usage:
-    from hermes_tor.gateway import start_tor_for_gateway
+    from darkloom.gateway import start_tor_for_gateway
 
     # Start Tor and inject ALL_PROXY before gateway connects
     mgr = start_tor_for_gateway()
@@ -23,7 +23,7 @@ Usage:
     mgr.stop()
 
 Or as a standalone pre-start wrapper:
-    python -m hermes_tor.gateway -- hermes gateway run
+    python -m darkloom.gateway -- hermes gateway run
 """
 
 from __future__ import annotations
@@ -39,19 +39,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Mapping, Optional
 from urllib.parse import urlsplit
 
-from hermes_tor.constants import (
+from darkloom.constants import (
     BRIDGES_PATH,
     DEFAULT_SOCKS_PORT,
     is_tor_installed,
 )
 if TYPE_CHECKING:
-    from hermes_tor.manager import TorManager
+    from darkloom.manager import TorManager
 
-from hermes_tor.policy import authorize_subprocess
+from darkloom.policy import authorize_subprocess
 
-from hermes_tor.secure_files import atomic_private_write, private_lock
+from darkloom.secure_files import atomic_private_write, private_lock
 
-from hermes_tor.privacy import get_logger
+from darkloom.privacy import get_logger
 
 logger = get_logger(__name__)
 
@@ -595,7 +595,7 @@ def start_tor_for_gateway(
     if policy.strict and not is_tor_installed():
         raise ProxyPolicyError(
             "strict mode requires a preinstalled Tor binary; run "
-            "`hermes-tor download` before enabling TOR_STRICT_MODE"
+            "`darkloom download` before enabling TOR_STRICT_MODE"
         )
 
     # Environment variables alone are not a verifiable transport. None of the
@@ -607,7 +607,7 @@ def start_tor_for_gateway(
 
     # Validate Hermes integrations before Tor bootstrap.
     # Strict mode fails closed before Hermes can establish any connections.
-    from hermes_tor.hardening import verify_compatibility
+    from darkloom.hardening import verify_compatibility
 
     compatibility = verify_compatibility(
         hermes_root, strict=None, runtime_probes=runtime_probes)
@@ -615,7 +615,7 @@ def start_tor_for_gateway(
         logger.info("Hermes control %s: %s (%s)", result.control.id,
                     result.status.value, result.evidence.value)
 
-    from hermes_tor.manager import TorManager
+    from darkloom.manager import TorManager
 
     mgr = TorManager(auto_download=not policy.strict, socks_port=socks_port)
 
@@ -699,10 +699,10 @@ def main():
     """Pre-start wrapper: start Tor, then exec the gateway.
 
     Usage:
-        python -m hermes_tor.gateway -- hermes gateway run
-        python -m hermes_tor.gateway --timeout 90 -- hermes gateway run
+        python -m darkloom.gateway -- hermes gateway run
+        python -m darkloom.gateway --timeout 90 -- hermes gateway run
 
-    The -- separator divides hermes-tor flags from gateway flags.
+    The -- separator divides darkloom flags from gateway flags.
     Everything after -- is passed verbatim to the gateway process.
     """
     import argparse
@@ -736,12 +736,12 @@ def main():
         gateway_cmd = gateway_cmd[1:]
 
     if not gateway_cmd:
-        print("Usage: python -m hermes_tor.gateway -- hermes gateway run", file=sys.stderr)
-        print("       python -m hermes_tor.gateway --timeout 90 -- hermes gateway run", file=sys.stderr)
+        print("Usage: python -m darkloom.gateway -- hermes gateway run", file=sys.stderr)
+        print("       python -m darkloom.gateway --timeout 90 -- hermes gateway run", file=sys.stderr)
         sys.exit(1)
 
     # Start Tor
-    print(f"[hermes-tor] Starting Tor daemon (port {args.port}, timeout {args.timeout}s)...")
+    print(f"[darkloom] Starting Tor daemon (port {args.port}, timeout {args.timeout}s)...")
     try:
         mgr = start_tor_for_gateway(
             socks_port=args.port,
@@ -749,13 +749,13 @@ def main():
             write_env=not args.no_env_file,
         )
     except Exception as e:
-        print(f"[hermes-tor] FATAL: Tor failed to start: {e}", file=sys.stderr)
+        print(f"[darkloom] FATAL: Tor failed to start: {e}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"[hermes-tor] Tor running — SOCKS5 on 127.0.0.1:{args.port}")
-    print(f"[hermes-tor] ALL_PROXY injected — all gateway platforms will route through Tor")
-    print(f"[hermes-tor] Self-healing watchdog active (health every 15s, circuit rotate every 10min)")
-    print("[hermes-tor] Launching gateway (command arguments redacted)")
+    print(f"[darkloom] Tor running — SOCKS5 on 127.0.0.1:{args.port}")
+    print(f"[darkloom] ALL_PROXY injected — all gateway platforms will route through Tor")
+    print(f"[darkloom] Self-healing watchdog active (health every 15s, circuit rotate every 10min)")
+    print("[darkloom] Launching gateway (command arguments redacted)")
     print()
 
     # Exec the gateway
@@ -764,14 +764,14 @@ def main():
         result = subprocess.run(gateway_cmd)
         sys.exit(result.returncode)
     finally:
-        print("[hermes-tor] Gateway exited — stopping Tor daemon...")
+        print("[darkloom] Gateway exited — stopping Tor daemon...")
         # Stop watchdog first
         watchdog = getattr(mgr, '_watchdog', None)
         if watchdog:
             watchdog.stop()
         mgr.stop()
         clear_gateway_env()
-        print("[hermes-tor] Tor stopped.")
+        print("[darkloom] Tor stopped.")
 
 
 if __name__ == "__main__":

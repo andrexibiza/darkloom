@@ -8,7 +8,7 @@
     ]
   },
   "patch": {
-    "id": "hermes-tor/0003-harden-tor-proxy-all-platforms@22fd1e92f714",
+    "id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714",
     "path": "patches/0003-harden-tor-proxy-all-platforms.patch",
     "sha256": "22fd1e92f714fa647898bcb1ebea7e1b03e5e9a354c54c33c61016d24c237f8f"
   },
@@ -27,7 +27,7 @@
       "files": [
         "plugins/platforms/photon/adapter.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
     },
     {
       "id": "HT-002",
@@ -35,7 +35,7 @@
       "files": [
         "plugins/platforms/whatsapp/adapter.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
     },
     {
       "id": "HT-003",
@@ -43,7 +43,7 @@
       "files": [
         "tools/browser_tool.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
     },
     {
       "id": "HT-004",
@@ -51,7 +51,7 @@
       "files": [
         "plugins/web/firecrawl/provider.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
     },
     {
       "id": "HT-005",
@@ -59,7 +59,7 @@
       "files": [
         "plugins/platforms/slack/adapter.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
     },
     {
       "id": "HT-006",
@@ -67,7 +67,7 @@
       "files": [
         "gateway/platforms/base.py"
       ],
-      "patch_id": "hermes-tor/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
     },
     {
       "id": "HT-007",

@@ -17,7 +17,7 @@ import secrets
 import shlex
 import signal
 import subprocess
-from hermes_tor.policy import NetworkChannel, authorize
+from darkloom.policy import NetworkChannel, authorize
 import threading
 import time
 from contextlib import contextmanager
@@ -28,7 +28,7 @@ from urllib.parse import quote
 
 import httpx
 
-from hermes_tor.constants import (
+from darkloom.constants import (
     DEFAULT_SOCKS_PORT,
     DEFAULT_CONTROL_PORT,
     TOR_DATA_DIR,
@@ -36,10 +36,10 @@ from hermes_tor.constants import (
     get_lyrebird_path,
     get_geoip_paths,
 )
-from hermes_tor.bridges import Bridge
-from hermes_tor.secure_files import atomic_private_write, private_lock
+from darkloom.bridges import Bridge
+from darkloom.secure_files import atomic_private_write, private_lock
 
-from hermes_tor.privacy import get_logger
+from darkloom.privacy import get_logger
 
 logger = get_logger(__name__)
 
@@ -54,7 +54,7 @@ def authenticated_socks_proxy_url(socks_port: int = DEFAULT_SOCKS_PORT) -> str:
 # Template with absolute paths filled at generation time.
 # No ${pt_path} — we resolve paths ourselves.
 TORRC_TEMPLATE = """\
-# hermes-tor generated torrc — {generated_at}
+# darkloom generated torrc — {generated_at}
 # DO NOT EDIT MANUALLY — regenerated on each start.
 
 # Bind locally and use SOCKS credentials as Tor circuit-isolation tokens.
@@ -434,7 +434,7 @@ class TorDaemon:
             raise TorDaemonError(
                 f"Lyrebird (pluggable transport) not found at {lyrebird}.\n"
                 f"The Tor Expert Bundle should include lyrebird. "
-                f"Re-download with: hermes-tor download"
+                f"Re-download with: darkloom download"
             )
 
         geoip, geoip6 = get_geoip_paths(self.tor_binary_dir)
@@ -487,7 +487,7 @@ class TorDaemon:
 
     def _write_torrc(self):
         """Write torrc to disk with secure permissions."""
-        from hermes_tor.secure_files import private_lock, atomic_private_write
+        from darkloom.secure_files import private_lock, atomic_private_write
 
         torrc_content = self._build_torrc()
         with private_lock(self._torrc_path):

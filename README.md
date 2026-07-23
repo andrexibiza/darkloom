@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Tor-15.0.19-7D4698?logo=torproject" alt="Tor 15.0.19">
-  <img src="https://img.shields.io/badge/hardening-7%20PRs%20merged-brightgreen" alt="7 hardening PRs merged">
+  <img src="https://img.shields.io/badge/PRs_merged-19-brightgreen" alt="19 PRs merged">
   <img src="https://img.shields.io/badge/platforms-20+-blue" alt="20+ platforms">
   <img src="https://img.shields.io/badge/tests-102/102-green" alt="102/102 tests">
   <img src="https://img.shields.io/badge/license-MIT-yellow" alt="MIT">

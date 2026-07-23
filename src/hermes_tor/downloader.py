@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -254,6 +255,35 @@ def _metadata_path() -> Path:
     return TOR_BINARY_DIR / "install-metadata.json"
 
 
+def _secure_install_parent(path: Path) -> None:
+    """Create an owner-only install parent, independent of the process umask."""
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    info = path.lstat()
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise DownloadError("Tor installation parent is not a real directory")
+    if hasattr(os, "geteuid") and info.st_uid != os.geteuid():
+        raise DownloadError("Tor installation parent is not owned by this user")
+    path.chmod(0o700)
+
+
+def _validate_install_permissions() -> None:
+    """Reject an installation that another local account can replace."""
+    if os.name == "nt":
+        return
+    for path in (TOR_BINARY_DIR.parent, TOR_BINARY_DIR):
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            raise DownloadError("Tor installation permissions cannot be verified") from exc
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) & 0o022
+        ):
+            raise DownloadError(f"Tor installation directory is not private: {path}")
+
+
 def validate_installed_binary(*, strict: bool = True) -> bool:
     """Re-hash the executable against authenticated installation metadata."""
     binary = get_tor_binary_path()
@@ -264,6 +294,7 @@ def validate_installed_binary(*, strict: bool = True) -> bool:
         if strict:
             raise DownloadError("Tor installation has no signature-verification metadata")
         return False
+    _validate_install_permissions()
     try:
         metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         signer = metadata["signer_fingerprint"].upper()
@@ -302,7 +333,7 @@ def download_tor_binary(progress_callback=None, force: bool = False) -> Path:
         )
 
     url = get_download_url()
-    TOR_BINARY_DIR.parent.mkdir(parents=True, exist_ok=True)
+    _secure_install_parent(TOR_BINARY_DIR.parent)
     with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
         archive = Path(tmp.name)
     staging = Path(

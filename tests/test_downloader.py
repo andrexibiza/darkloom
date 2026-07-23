@@ -2,16 +2,20 @@
 
 import hashlib
 import io
+import os
+import stat
 import tarfile
 from pathlib import Path
 
 import pytest
 
+import hermes_tor.downloader as downloader
 from hermes_tor.downloader import (
     BundleManifest,
     DownloadError,
     _atomic_install,
     _extract_verified_archive,
+    _secure_install_parent,
 )
 
 
@@ -150,3 +154,27 @@ def test_valid_bundle_verifies_digest_and_permissions(tmp_path):
     )
     assert (staging / "tor/tor").read_bytes() == b"safe executable"
     assert (staging / "data/geoip").read_bytes() == b"data"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission regression test")
+def test_install_parent_is_private_with_permissive_umask(tmp_path):
+    parent = tmp_path / "shared" / "tor"
+    previous = os.umask(0)
+    try:
+        _secure_install_parent(parent)
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE(parent.stat().st_mode) == 0o700
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission regression test")
+def test_validator_rejects_locally_replaceable_install_tree(tmp_path, monkeypatch):
+    install = tmp_path / "shared" / "tor-bin"
+    install.mkdir(parents=True)
+    install.parent.chmod(0o777)
+    install.chmod(0o700)
+    monkeypatch.setattr(downloader, "TOR_BINARY_DIR", install)
+
+    with pytest.raises(DownloadError, match="not private"):
+        downloader._validate_install_permissions()

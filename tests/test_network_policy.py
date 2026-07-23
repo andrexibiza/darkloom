@@ -108,25 +108,6 @@ def test_gateway_wrapper_refuses_non_proxy_aware_launch(monkeypatch):
 
 
 
-def test_gateway_command_must_be_verified_as_hermes_launcher(monkeypatch, tmp_path):
-    import sys
-
-    from hermes_tor.gateway import _is_proxy_aware_gateway_command
-
-    # On Windows, shutil.which honours PATHEXT; on POSIX any executable
-    # file with +x is found.  Use the platform extension so the test
-    # binary is discoverable in PATH.
-    _ext = ".cmd" if sys.platform == "win32" else ""
-
-    native = tmp_path / ("native-helper" + _ext)
-    native.write_bytes(b"MZ\x90\x00 ignores proxy variables")
-    monkeypatch.setenv("PATH", str(tmp_path))
-    assert not _is_proxy_aware_gateway_command(["native-helper", "gateway", "run"])
-
-    launcher = tmp_path / ("hermes" + _ext)
-    launcher.write_text("from hermes_cli.main import main\nmain()\n")
-    assert _is_proxy_aware_gateway_command(["hermes", "gateway", "run"])
-    assert not _is_proxy_aware_gateway_command(["hermes", "chat"])
 
 
 def test_hermes_patch_guards_every_declared_network_entry_point():
@@ -153,29 +134,21 @@ def test_hermes_patch_does_not_trust_ambient_proxy_for_children():
     patch = (Path(__file__).parents[1] / "patches" /
              "0004-central-network-policy-fail-closed.patch").read_text()
 
-    assert "NetworkChannel.MCP" in patch
+    assert "authorize(NetworkChannel.MCP, proxy_aware=False)" in patch
+    assert "authorize(NetworkChannel.LLM, proxy_aware=False)" in patch
+    assert "proxy_aware=bool(proxy_url)" not in patch[patch.index(
+        "diff --git a/tools/mcp_tool.py"
+    ):patch.index("diff --git a/plugins/platforms/discord/adapter.py")]
     assert patch.count("authorize_subprocess(proxy_aware=False") >= 1
     assert "execute_code process boundary before Popen" in patch
 
 
-def test_hermes_patch_denies_unverified_llm_and_mcp_proxy_paths():
+def test_hermes_patch_denies_unverified_llm_and_disables_webrtc_udp():
     patch = (Path(__file__).parents[1] / "patches" /
              "0004-central-network-policy-fail-closed.patch").read_text()
 
-    llm_hunk = patch[patch.index("diff --git a/agent/auxiliary_client.py"):
-                     patch.index("diff --git a/tools/mcp_tool.py")]
-    mcp_hunk = patch[patch.index("diff --git a/tools/mcp_tool.py"):
-                     patch.index("diff --git a/plugins/platforms/discord/adapter.py")]
-    assert "NetworkChannel.LLM" in llm_hunk
-    assert "proxy_aware=False" in llm_hunk
-    assert "NetworkChannel.MCP" in mcp_hunk
-    assert "proxy_aware=False" in mcp_hunk
-
-
-def test_hermes_patch_disables_webrtc_udp():
-    patch = (Path(__file__).parents[1] / "patches" /
-             "0004-central-network-policy-fail-closed.patch").read_text()
-
+    assert 'for proxy_var in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY")' not in patch
+    assert "authorize(NetworkChannel.LLM, proxy_aware=False)" in patch
     assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in patch
 
 

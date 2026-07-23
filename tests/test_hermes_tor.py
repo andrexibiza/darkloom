@@ -327,22 +327,31 @@ def test_format_bridges_for_torrc():
     assert lines == ["Bridge 1.2.3.4:443 " + "A" * 40, "Bridge 5.6.7.8:80 " + "B" * 40]
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX mode assertion")
 def test_private_bridge_permissions_and_symlink_rejection(tmp_path):
     from hermes_tor.bridges import save_bridges_to_file
 
     private_dir = tmp_path / "private"
     path = private_dir / "bridges.txt"
-    save_bridges_to_file(path, ["bridge1"])
-    assert stat.S_IMODE(private_dir.stat().st_mode) == 0o700
-    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    save_bridges_to_file(path, ["obfs4 1.2.3.4:443 ABCDEF1234567890ABCDEF1234567890ABCDEF12 cert=xyz iat-mode=0"])
 
+    # Verify file was created with restricted access.
+    # On POSIX, mode bits are the enforcement mechanism.
+    # On Windows, _windows_owner_only() handles ACL hardening;
+    # st_mode is always 0o777/0o666 regardless of chmod.
+    if os.name != "nt":
+        assert stat.S_IMODE(private_dir.stat().st_mode) == 0o700
+        assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    else:
+        assert private_dir.is_dir()
+        assert path.read_text()
+
+    # Symlink targets must be rejected to prevent write-through attacks.
     target = tmp_path / "target"
     target.write_text("do not replace")
     link = private_dir / "linked.txt"
     link.symlink_to(target)
     with pytest.raises(OSError, match="symbolic link"):
-        save_bridges_to_file(link, ["bridge2"])
+        save_bridges_to_file(link, ["obfs4 5.6.7.8:80 FEDCBA9876543210FEDCBA9876543210FEDCBA98 cert=abc iat-mode=1"])
     assert target.read_text() == "do not replace"
 
 
@@ -414,7 +423,6 @@ def test_tor_daemon_requires_binary_to_exist(tmp_path):
         TorDaemon(tor_binary=tmp_path / "nonexistent_tor", bridges=[])
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX mode assertion")
 def test_torrc_is_written_privately(tmp_path):
     from hermes_tor.daemon import TorDaemon
 
@@ -422,8 +430,19 @@ def test_torrc_is_written_privately(tmp_path):
     fake_tor.touch()
     daemon = TorDaemon(fake_tor, data_dir=tmp_path / "data")
     daemon._write_torrc()
-    assert stat.S_IMODE(daemon.data_dir.stat().st_mode) == 0o700
-    assert stat.S_IMODE((daemon.data_dir / "torrc").stat().st_mode) == 0o600
+
+    # Verify torrc was created via secure, owner-only file operations.
+    # On POSIX, mode bits reflect the 0o700/0o600 enforcement.
+    # On Windows, _windows_owner_only() handles ACL hardening;
+    # st_mode does not reflect chmod changes.
+    if os.name != "nt":
+        assert stat.S_IMODE(daemon.data_dir.stat().st_mode) == 0o700
+        assert stat.S_IMODE((daemon.data_dir / "torrc").stat().st_mode) == 0o600
+    else:
+        assert daemon.data_dir.is_dir()
+        torrc = daemon.data_dir / "torrc"
+        assert torrc.is_file()
+        assert "SOCKSPort" in torrc.read_text()
 
 
 def _daemon_for_isolation_test(tmp_path):

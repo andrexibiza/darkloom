@@ -134,17 +134,21 @@ def test_hermes_patch_does_not_trust_ambient_proxy_for_children():
     patch = (Path(__file__).parents[1] / "patches" /
              "0004-central-network-policy-fail-closed.patch").read_text()
 
-    assert 'if config.get("command") and not config.get("url"):' in patch
-    assert patch.count("authorize_subprocess(proxy_aware=False") >= 2
+    assert "authorize(NetworkChannel.MCP, proxy_aware=False)" in patch
+    assert "authorize(NetworkChannel.LLM, proxy_aware=False)" in patch
+    assert "proxy_aware=bool(proxy_url)" not in patch[patch.index(
+        "diff --git a/tools/mcp_tool.py"
+    ):patch.index("diff --git a/plugins/platforms/discord/adapter.py")]
+    assert patch.count("authorize_subprocess(proxy_aware=False") >= 1
     assert "execute_code process boundary before Popen" in patch
 
 
-def test_hermes_patch_installs_llm_proxy_and_disables_webrtc_udp():
+def test_hermes_patch_denies_unverified_llm_and_disables_webrtc_udp():
     patch = (Path(__file__).parents[1] / "patches" /
              "0004-central-network-policy-fail-closed.patch").read_text()
 
-    assert 'for proxy_var in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY")' in patch
-    assert "proxy_aware=proxy_installed" in patch
+    assert 'for proxy_var in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY")' not in patch
+    assert "authorize(NetworkChannel.LLM, proxy_aware=False)" in patch
     assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in patch
 
 

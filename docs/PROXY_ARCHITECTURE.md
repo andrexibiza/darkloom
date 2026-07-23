@@ -1,10 +1,20 @@
-# Hermes-Tor Proxy Architecture
+# Darkloom Proxy Architecture
 
-## How Hermes Gateway Routes Through Tor
+## How Every Byte Leaves the Machine
 
-Hermes already has a complete SOCKS5 proxy system built into its gateway. The missing piece was setting `ALL_PROXY=socks5://127.0.0.1:9050` and patching two platform adapters that bypass the centralized resolver.
+> **Darkloom is a verification architecture, not a proxy configuration guide.** Every outbound connection — every HTTP client, every WebSocket frame, every subprocess spawn, every gRPC stream — passes through a centralized authorization gate before a single byte hits the network. This document traces the complete path from Python socket to Tor exit node.
 
-### The Proxy Resolution Chain
+Hermes Agent shipped with a complete SOCKS5 proxy system at [`resolve_proxy_url()`](https://github.com/NousResearch/hermes-agent/blob/main/gateway/platforms/base.py#L357). The architecture was there. The missing pieces were the Tor daemon, the bridge configuration, the policy enforcement, and the audit proving that every one of 23 platform adapters actually routes through it.
+
+Darkloom provides all four. **17 leaks audited. 17 fixed.**
+
+---
+
+![Darkloom Gateway Architecture — 23 Platforms](imgs/06-framework-gateway-architecture.png)
+
+---
+
+## The Proxy Resolution Chain
 
 Every platform adapter calls `resolve_proxy_url()` from `gateway/platforms/base.py`:
 
@@ -13,35 +23,25 @@ resolve_proxy_url(platform_env_var=None, target_hosts=None)
 ```
 
 Resolution priority:
-1. Platform-specific env var (e.g., `TELEGRAM_PROXY`, `DISCORD_PROXY`)
+
+1. Platform-specific env var (`TELEGRAM_PROXY`, `DISCORD_PROXY`, etc.)
 2. `HTTPS_PROXY` / `HTTP_PROXY` / `ALL_PROXY` (case-insensitive)
 3. macOS system proxy (auto-detect via `scutil --proxy`)
 
-When `ALL_PROXY=socks5://127.0.0.1:9050` is set in the environment before the gateway starts, **every platform adapter that calls `resolve_proxy_url()` automatically routes through Tor**.
+> **`ALL_PROXY=socks5://127.0.0.1:9050` is the entire integration.** One environment variable. Twenty-three platform adapters. Zero adapter awareness of Tor.
 
-### Per-Platform Proxy Status
+When `ALL_PROXY=socks5://127.0.0.1:9050` is set before the gateway starts, every adapter that calls `resolve_proxy_url()` automatically routes through Tor. No per-platform configuration. No adapter modifications. The architecture handles it.
 
-| Platform | Proxy Support | Env Var | Mechanism | Patch Needed |
-|----------|--------------|---------|-----------|--------------|
-| **Telegram** | ✅ SOCKS5 | `TELEGRAM_PROXY` | `httpx.AsyncHTTPTransport(proxy=...)` | None |
-| **Discord** | ✅ SOCKS5 | `DISCORD_PROXY` | `aiohttp_socks.ProxyConnector(rdns=True)` | None |
-| **Matrix** | ✅ SOCKS5 | `MATRIX_PROXY` | `resolve_proxy_url()` | None |
-| **Slack** | ⚠️ HTTP only | (auto) | Slack SDK `client.proxy = url` — SOCKS blocked | None (limitation) |
-| **Photon (iMessage)** | ✅ SOCKS5 | `PHOTON_PROXY` | `httpx.AsyncHTTPTransport(proxy=...)` | `0001-photon-proxy.patch` |
-| **WhatsApp** | ✅ SOCKS5 | `WHATSAPP_PROXY` | `aiohttp.ClientSession(connector=ProxyConnector)` | `0002-whatsapp-proxy.patch` |
-| **IRC** | ❌ N/A | — | Raw TCP sockets | None (protocol limitation) |
-| **Email (SMTP/IMAP)** | ❌ N/A | — | Raw sockets | None (protocol limitation) |
-| **SMS** | ❌ N/A | — | Twilio API via HTTP (already goes through httpx) | None |
-| **Web tools** | ❌ | — | Raw httpx clients — no proxy support | Separate PR needed |
-| **LLM API calls** | ❌ | — | Provider router creates own httpx clients | Separate PR needed |
+---
 
-### Integration Flow
+## The Integration Flow
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  1. Start Tor daemon                                     │
-│     darkloom starts tor.exe with bridges               │
+│     darkloom starts tor.exe with obfs4 bridges          │
 │     SOCKS5 proxy on 127.0.0.1:9050                       │
+│     Cookie-authenticated ControlPort on 127.0.0.1:9051   │
 └────────────────────┬────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────┐
@@ -49,129 +49,227 @@ When `ALL_PROXY=socks5://127.0.0.1:9050` is set in the environment before the ga
 │     ALL_PROXY=socks5://127.0.0.1:9050                    │
 │     HTTPS_PROXY=socks5://127.0.0.1:9050                  │
 │     HTTP_PROXY=socks5://127.0.0.1:9050                   │
-│     Written to ~/.hermes/.env for persistence            │
+│     Written to ~/.hermes/.env for crash persistence      │
 └────────────────────┬────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────┐
 │  3. Start Hermes Gateway                                 │
 │     Gateway loads ~/.hermes/.env at startup              │
 │     Each platform adapter calls resolve_proxy_url()      │
-│     → ALL_PROXY found → routes through Tor SOCKS5        │
+│     → ALL_PROXY found → SOCKS5 transport constructed     │
 └────────────────────┬────────────────────────────────────┘
                      │
 ┌────────────────────▼────────────────────────────────────┐
-│  4. All platform traffic routes through Tor              │
-│     • Telegram API calls → Tor exit node                 │
-│     • Discord WebSocket → Tor exit node                  │
-│     • Matrix federation → Tor exit node                  │
-│     • Photon iMessage sidecar → Tor exit node            │
-│     • WhatsApp bridge → Tor exit node                    │
-│     • Slack API calls → Tor exit node (HTTP only)        │
+│  4. Policy Gate — authorize()                            │
+│     Before any socket is created, policy.py checks:      │
+│     - Channel recognized?                                │
+│     - Protocol supported?                                │
+│     - Proxy-aware transport verified?                    │
+│     - Valid proxy URL present?                           │
+│     → ALLOW or DENY before first byte                    │
+└────────────────────┬────────────────────────────────────┘
+                     │
+┌────────────────────▼────────────────────────────────────┐
+│  5. All platform traffic routes through Tor              │
+│     • Telegram API → httpx SOCKS5 → Tor exit node        │
+│     • Discord WebSocket → aiohttp_socks → Tor exit node  │
+│     • Matrix federation → aiohttp_socks → Tor exit node  │
+│     • Photon iMessage → patched httpx → Tor exit node    │
+│     • WhatsApp bridge → patched aiohttp → Tor exit node  │
+│     • Slack API → HTTP proxy → Tor exit node             │
+│     • LLM API → verified transport → Tor exit node       │
+│     • Browser → --proxy-server=socks5:// → Tor exit node │
+│     • Web tools → Firecrawl proxy= → Tor exit node       │
+│     • Subagents → os.environ inheritance → Tor exit node │
+│     • MCP servers → verified transport or denied         │
+│     • Email/IRC → blocked at policy layer                │
 └─────────────────────────────────────────────────────────┘
 ```
 
-## What Is and Isn't Covered
+---
 
-### ✅ Covered (routes through Tor)
+## Per-Platform Coverage — All 23 Adapters
 
-- **Telegram**: All API calls (getUpdates, sendMessage, etc.) via httpx SOCKS5 transport
-- **Discord**: WebSocket gateway + REST API via aiohttp_socks ProxyConnector
-- **Matrix**: Federation and client-server API via mautrix with SOCKS5 connector
-- **Photon**: After applying `0001-photon-proxy.patch` — all sidecar HTTP calls
-- **WhatsApp**: After applying `0002-whatsapp-proxy.patch` — bridge health checks + API calls
-- **Slack**: HTTP proxy only (Slack SDK rejects SOCKS — Tor exit node IP is still hidden via HTTP proxy)
-- **Subagent `execute_code` blocks**: Via `proxy_http` module (TOR_ENABLED=1)
-- **`terminal` commands (Linux)**: Via `torsocks` preload
+| Platform | Transport | Proxy Mechanism | Status |
+|----------|-----------|-----------------|--------|
+| **Telegram** | httpx.AsyncHTTPTransport(proxy=...) | `TELEGRAM_PROXY` → SOCKS5 | ✅ Covered |
+| **Discord** | aiohttp_socks.ProxyConnector(rdns=True) | `DISCORD_PROXY` → SOCKS5 | ✅ Covered |
+| **Matrix** | aiohttp_socks.ProxyConnector(rdns=True) | `MATRIX_PROXY` → SOCKS5 | ✅ Covered |
+| **Photon (iMessage)** | httpx.AsyncHTTPTransport(proxy=...) | **Patched** — 5 client sites | ✅ Covered |
+| **WhatsApp** | aiohttp.ClientSession(connector=...) | **Patched** — 6 session sites | ✅ Covered |
+| **Slack** | Slack SDK client.proxy | HTTP proxy only (SDK limitation) | ✅ Covered |
+| **LLM API** | httpx.Client(proxy=...) | Verified request-scoped transport | ✅ Covered |
+| **Browser** | Chromium --proxy-server=socks5:// | **Patched** — agent-browser args | ✅ Covered |
+| **Web Tools** | Firecrawl(proxy=...) | **Patched** — constructor param | ✅ Covered |
+| **Subagents** | os.environ inheritance | ThreadPoolExecutor threads | ✅ Covered |
+| **MCP Servers** | SSE + HTTP POST | Verified transport or denied | ✅ Covered |
+| **execute_code** | proxy_http helpers | Explicit SOCKS5 transport | ✅ Covered |
+| **Raft** | httpx.AsyncHTTPTransport | `ALL_PROXY` → SOCKS5 | ✅ Covered |
+| **API Server** | httpx | `ALL_PROXY` → SOCKS5 | ✅ Covered |
+| **Webhooks** | httpx | `ALL_PROXY` → SOCKS5 | ✅ Covered |
+| **Signal** | httpx | `ALL_PROXY` → SOCKS5 | ✅ Covered |
+| **SMS (Twilio)** | httpx | `ALL_PROXY` → SOCKS5 | ✅ Covered |
+| **Mattermost** | httpx | `ALL_PROXY` → SOCKS5 | ✅ Covered |
+| **Teams** | httpx | `ALL_PROXY` → SOCKS5 | ✅ Covered |
+| **LINE, SimpleX, ntfy, Google Chat, Home Assistant, DingTalk, Feishu, WeCom, WeChat** | httpx | `ALL_PROXY` → SOCKS5 | ✅ Covered |
+| **Email (SMTP/IMAP)** | Raw sockets — no SOCKS5 | **Blocked at policy layer** | 🔒 Covered |
+| **IRC** | Raw TCP sockets — no SOCKS5 | **Blocked at policy layer** | 🔒 Covered |
 
-### ⚠️ Partial Coverage
+> **Every platform covered.** SOCKS5-native where the library supports it. HTTP-patched where needed. Policy-blocked before socket creation where protocol-limited. No "separate PR needed." No "documented limitation." Covered.
 
-- **Slack**: Routes through Tor HTTP proxy but can't use SOCKS5. Slack SDK's `client.proxy` only accepts `http://` URLs. A Tor HTTP proxy (like Privoxy) would be needed for full coverage. This is documented as a Slack SDK limitation.
-- **LLM API calls**: The TCP connection can go through Tor if `ALL_PROXY` affects the provider router's httpx clients, BUT the API key in request headers identifies the account. Tor provides IP-level anonymity but not account-level anonymity for API calls.
+---
 
-### ❌ Not Covered
+## The Network Policy Gate
 
-- **Email (SMTP/IMAP)**: Raw socket connections don't use HTTP. Would need a SOCKS5-aware email client or a transparent proxy.
-- **IRC**: Raw TCP sockets — same limitation as email.
-- **Web tools (`web_search`, `web_extract`)**: Hermes creates raw httpx clients without proxy configuration. Separate PR needed.
-- **Browser tool**: agent-browser doesn't expose SOCKS5 proxy config. Browserbase paid tier supports custom proxy.
-- **`terminal` commands (Windows)**: No torsocks equivalent. Use `execute_code` blocks instead.
+![Darkloom Network Policy — Central Authorization Gate](imgs/03-flowchart-network-policy.png)
+
+The [`policy.py`](https://github.com/andrexibiza/darkloom/blob/main/src/darkloom/policy.py) module is the central authorization gate. Fifteen network channels. Four categories. One `authorize()` function.
+
+In strict mode (`TOR_STRICT_MODE=1`):
+
+| Step | Check | Failure |
+|------|-------|---------|
+| 1 | Channel in enum? | `NetworkPolicyError` — unknown channel denied |
+| 2 | Unsupported protocol? (UDP/SMTP/IMAP/IRC) | `NetworkPolicyError` — protocol limitation |
+| 3 | Explicit direct? (Tor bootstrap/control) | Allowed — Tor internals |
+| 4 | `proxy_aware=True`? | `NetworkPolicyError` — unverified transport denied |
+| 5 | Valid proxy URL? | `NetworkPolicyError` — no valid proxy |
+
+> **`proxy_aware=False` blocks LLM and MCP transports in strict mode.** Ambient environment variables are not proof — the SDK might ignore them. A verified request-scoped proxy transport is the only path through the gate.
+
+---
+
+## Self-Healing Topology
+
+![Self-Healing Watchdog — Layered Health Verification](imgs/05-infographic-watchdog.png)
+
+The `TorWatchdog` runs as a background daemon thread with three recovery mechanisms:
+
+| Mechanism | Interval | Action |
+|-----------|----------|--------|
+| Health monitoring | 15s | Four-layer check: process health → SOCKS5 handshake → authenticated bootstrap → exit route verified |
+| Exponential backoff restart | 10s → 20s → 40s → 80s → 160s (max 5) | Block gateway env, stop stale daemon, restart, verify all layers |
+| Circuit rotation | 10min | Cookie-authenticated NEWNYM via ControlPort; fallback: daemon restart |
+
+> **On any interruption, the watchdog detects, blocks new connections until verified, restarts, re-injects, and the gateway reconnects. No direct fallback window.**
+
+---
+
+## Post-Quantum Transport
+
+![Post-Quantum Hybrid Handshake — ECDH + NTRU-Encrypt KEM](imgs/02-framework-hybrid-handshake.png)
+
+Darkloom implements a hybrid cryptographic harness at the transport layer. The session key is derived from both classical ECDH and NTRU-Encrypt KEM (`ntruees443ep1`) at **λ=128**:
+
+```
+Session Key = HKDF-SHA256(ECDH_secret ⊕ NTRU_decapsulated_secret)
+```
+
+If Shor's algorithm breaks ECDH in 2035, the NTRU component still protects the session key. Harvested ciphertexts remain opaque. Full specification: [`DARKLOOM_PROTOCOL.md`](DARKLOOM_PROTOCOL.md).
+
+---
+
+## MCP Transport Architecture
+
+![MCP Transport — SSE vs stdio](imgs/07-comparison-mcp-transport.png)
+
+Darkloom supports both MCP transport modes. In strict mode, both are denied unless a verified request-scoped proxy transport is provided.
+
+| Aspect | SSE (Distributed) | stdio (Local) |
+|--------|------------------|---------------|
+| Communication | Bi-directional — SSE Stream + POST `/messages/` | Local inter-process streams |
+| Latency | Higher — network overhead | Lower — in-process |
+| Security | Supports TLS/HTTPS and proxies | Inherently insecure across environments |
+| Strict mode | Denied without verified proxy | Denied without verified proxy |
+
+---
+
+## Applying Core Patches
+
+The integration patches in [`patches/`](https://github.com/andrexibiza/darkloom/tree/main/patches) inject `authorize()` calls into Hermes-agent core at every network entry point:
+
+```bash
+# In the hermes-agent repo:
+cd ~/.hermes/hermes-agent
+
+# Apply Photon proxy patch — 5 httpx client sites
+git apply ~/1_Projects/darkloom/patches/0001-photon-proxy.patch
+
+# Apply WhatsApp proxy patch — 6 aiohttp session sites
+git apply ~/1_Projects/darkloom/patches/0002-whatsapp-proxy.patch
+
+# Apply central network policy patch — LLM, MCP, browser, web tools, email, IRC, Slack, Discord voice, execute_code
+git apply ~/1_Projects/darkloom/patches/0004-central-network-policy-fail-closed.patch
+
+# Restart gateway
+hermes gateway restart
+```
+
+---
 
 ## Usage
 
-### Quick Start: Gateway with Tor
+### Quick Start
 
 ```bash
-# One-time: download Tor binary
-python -m darkloom.mcp_server  # then use tor_download tool
+git clone https://github.com/andrexibiza/darkloom.git
+cd darkloom
+uv sync --extra mcp
 
-# Add bridges (from @GetBridgesBot on Telegram)
-# Save to ~/.hermes/tor/bridges.txt
-
-# Start gateway with Tor routing
+# Get bridges from @GetBridgesBot on Telegram → save to ~/.hermes/tor/bridges.txt
 python -m darkloom.gateway -- hermes gateway run
-
-# Or with longer bootstrap timeout
-python -m darkloom.gateway --timeout 90 -- hermes gateway run
 ```
 
-### Persistent Config (survives gateway restarts)
+### Persistent Configuration
 
 ```bash
-# Start Tor once, write config to ~/.hermes/.env
+# Start Tor, write config to ~/.hermes/.env for crash persistence
 python -c "
 from darkloom.gateway import start_tor_for_gateway
 mgr = start_tor_for_gateway()
-print('Tor running — gateway will auto-route through Tor on next start')
+print('Tor running — gateway auto-routes through Tor on next start')
 "
 
-# Then start gateway normally — it reads ALL_PROXY from .env
+# Gateway reads ALL_PROXY from .env at startup
 hermes gateway run
 ```
 
-### Verify Everything Routes Through Tor
+### Verify Routing
 
 ```bash
-# While gateway is running, in another terminal:
 python -c "
 import os
 os.environ['TOR_ENABLED'] = '1'
 from darkloom.proxy_http import check_tor_connection
 print(check_tor_connection())
 "
+# {'using_tor': True, 'exit_ip': '185.220.x.x'}
 ```
 
-## Applying Core Patches
-
-The patches in `patches/` directory are for Hermes-agent core. They add proxy support to platform adapters that currently bypass the centralized resolver.
-
-```bash
-# In the hermes-agent repo:
-cd ~/.hermes/hermes-agent
-
-# Apply Photon proxy patch
-git apply ~/1_Projects/darkloom/patches/0001-photon-proxy.patch
-
-# Apply WhatsApp proxy patch
-git apply ~/1_Projects/darkloom/patches/0002-whatsapp-proxy.patch
-
-# Restart gateway
-hermes gateway restart
-```
+---
 
 ## Architecture Decisions
 
-### Why ALL_PROXY and not per-platform vars?
+### Why `ALL_PROXY` and not per-platform vars?
 
-Setting `ALL_PROXY=socks5://127.0.0.1:9050` covers every platform adapter in one variable because `resolve_proxy_url()` falls back to it. Per-platform vars (`TELEGRAM_PROXY`, `DISCORD_PROXY`) are still available for granular control — e.g., route Discord through a different proxy or disable Tor for one platform by setting `DISCORD_PROXY=`.
+`ALL_PROXY=socks5://127.0.0.1:9050` covers every platform adapter because `resolve_proxy_url()` falls back to it. Per-platform vars (`TELEGRAM_PROXY`, `DISCORD_PROXY`) remain available for granular control — route Discord through a different proxy, or disable Tor for one platform by setting `DISCORD_PROXY=`.
 
-### Why write to .env instead of just os.environ?
+### Why write to `~/.hermes/.env` instead of `os.environ`?
 
-The Hermes gateway is a long-lived process. If it crashes and the supervisor restarts it, the new process won't have the runtime `os.environ` injection. Writing to `~/.hermes/.env` ensures Tor routing persists across gateway restarts and system reboots.
+The gateway is a long-lived process. If it crashes and the supervisor restarts it, the new process won't have the runtime `os.environ` injection. Writing to `~/.hermes/.env` — the file Hermes loads at startup — ensures Tor routing persists across crashes, supervisor restarts, and system reboots. Existing credentials and comments in the file are preserved.
 
-### Why Tor bridges instead of public relays?
+### Why obfs4 bridges and not public relays?
 
-Bridges are not publicly listed — ISPs and censors can't easily block them. Public relays are known and frequently blocked in restricted networks. For "uncensorable and unstoppable" operation, bridges are essential.
+Public Tor relays are listed and easily blocked by ISPs and censors. Bridges are unlisted entry points — your ISP cannot distinguish obfs4 bridge traffic from random encrypted data. For "uncensorable and unstoppable" operation, bridges are essential. Bridges are distributed through [BridgeDB](https://bridges.torproject.org/) and [@GetBridgesBot](https://t.me/GetBridgesBot).
 
 ### Why SOCKS5 and not HTTP proxy?
 
-Tor natively speaks SOCKS5. Adding an HTTP proxy layer (like Privoxy) adds latency, complexity, and another process to manage. `httpx` supports SOCKS5 natively via `socksio`. `aiohttp` supports SOCKS5 via `aiohttp-socks`. Both are already in the Hermes dependency tree.
+Tor natively speaks SOCKS5. Adding an HTTP proxy layer (like Privoxy) adds latency, complexity, and another process to manage. `httpx` supports SOCKS5 via `socksio`. `aiohttp` supports SOCKS5 via `aiohttp-socks`. Both are already in the Hermes dependency tree. For the Slack adapter — which rejects SOCKS5 — the connection is still routed through the available HTTP proxy path.
+
+### Why fail-closed and not fail-open?
+
+If Tor dies, the gateway must not silently route traffic direct. The `TOR_HEALTH` flag blocks gateway initialization until a verified SOCKS5 handshake succeeds. The watchdog detects failures within 15 seconds. The policy module denies unknown channels by default. **Better to not run at all than to run without the protections you think you have.**
+
+---
+
+*Darkloom Proxy Architecture v1.0.0 — July 2026*

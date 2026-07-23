@@ -6,6 +6,34 @@ import pytest
 from pathlib import Path
 
 
+# ── upstream hardening patch tests ────────────────────────────
+
+
+def test_hardening_patch_keeps_local_adapter_traffic_direct():
+    """Gateway-to-local-sidecar traffic must never receive proxy settings."""
+    patch = (
+        Path(__file__).parents[1]
+        / "patches"
+        / "0003-harden-tor-proxy-all-platforms.patch"
+    ).read_text()
+
+    assert 'resolve_proxy_url(platform_env_var="PHOTON_PROXY")' not in patch
+    assert 'resolve_proxy_url(platform_env_var="WHATSAPP_PROXY")' not in patch
+    assert "proxy_kwargs_for_aiohttp" not in patch
+
+
+def test_hardening_patch_proxies_adapter_subprocess_traffic():
+    """The external-facing subprocesses still inherit the proxy configuration."""
+    patch = (
+        Path(__file__).parents[1]
+        / "patches"
+        / "0003-harden-tor-proxy-all-platforms.patch"
+    ).read_text()
+
+    assert 'env[_pk] = os.environ[_pk]' in patch
+    assert 'bridge_env[_pk] = os.environ[_pk]' in patch
+
+
 # ── constants tests ────────────────────────────────────────────
 
 

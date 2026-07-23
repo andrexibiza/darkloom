@@ -1,7 +1,15 @@
-"""Strict parsing and canonical serialization of Tor bridge lines."""
+"""Strict parsing and canonical serialization of Tor bridge lines.
 
+Bridges are user-provided. Sources:
+  1. Telegram: @GetBridgesBot (send /bridges)
+  2. Web: https://bridges.torproject.org/bridges?transport=obfs4
+  3. Email: bridges@torproject.org (from Gmail/Riseup, body: "get transport obfs4")
+
+Bridges are stored one-per-line in ~/.hermes/tor/bridges.txt.
+"""
 import ipaddress
 import logging
+import os
 import re
 import unicodedata
 from dataclasses import dataclass
@@ -16,6 +24,13 @@ MAX_BRIDGE_LINE_LENGTH = 4096
 _FINGERPRINT_RE = re.compile(r"[0-9A-Fa-f]{40}\Z", re.ASCII)
 _OPTION_RE = re.compile(r"(?P<key>[A-Za-z][A-Za-z0-9_-]*)=(?P<value>[A-Za-z0-9._~:/?&=+,%@-]+)\Z", re.ASCII)
 _OBFS4_CERT_RE = re.compile(r"[A-Za-z0-9+/=_-]+\Z", re.ASCII)
+
+# BridgeDB's obfs4 result format: one valid bridge per line.
+# fullmatch ensures a valid prefix cannot disguise trailing junk.
+OBFS4_RESULT_RE = re.compile(
+    r"obfs4\s+[\d.]+:(?:[1-9]\d{0,4})\s+[A-Fa-f0-9]{40}"
+    r"\s+cert=\S+\s+iat-mode=[01]"
+)
 
 
 @dataclass(frozen=True)
@@ -134,6 +149,46 @@ def validate_bridge(line: str) -> bool:
     return parse_bridge_line(line) is not None
 
 
+def parse_bridge_set(text: str, *, transport: str | None = None) -> list[Bridge]:
+    """Parse an all-or-nothing set of bridge lines from an external source.
+
+    Unlike :func:`parse_bridge_line`, which is intentionally tolerant when
+    reading a user-managed file, this rejects comments, markup, unknown
+    transports, and mixed malformed content.  Callers can therefore validate
+    an entire response before replacing a known-good configuration.
+    """
+    lines = text.splitlines()
+    if not lines:
+        raise ValueError("bridge result is empty")
+
+    bridges: list[Bridge] = []
+    for line in lines:
+        if not line.strip():
+            continue
+        bridge = parse_bridge_line(line)
+        if (
+            bridge is None
+            or bridge.transport == "unknown"
+            or (transport is not None and bridge.transport != transport)
+        ):
+            raise ValueError("bridge result contains an invalid line")
+        if bridge.transport == "obfs4" and not OBFS4_RESULT_RE.fullmatch(bridge.line):
+            raise ValueError("bridge result contains a malformed obfs4 line")
+        if bridge.transport == "obfs4":
+            host, port = bridge.address.rsplit(":", 1)
+            try:
+                ipaddress.IPv4Address(host)
+            except ipaddress.AddressValueError as exc:
+                raise ValueError("bridge result contains an invalid address") from exc
+            if not 1 <= int(port) <= 65535:
+                raise ValueError("bridge result contains an invalid port")
+        bridges.append(bridge)
+
+    if not bridges:
+        raise ValueError("bridge result contains no bridges")
+    return bridges
+
+
 def load_bridges_from_file(path: Path) -> list[Bridge]:
     if not path.exists():
         logger.warning("No bridges file at %s — Tor will use public relays", path)
@@ -177,7 +232,7 @@ def save_bridges_to_file(path: Path, bridge_lines: list[str], append: bool = Fal
         )
         atomic_private_write(path, content)
 
-    logger.info("Wrote %d bridges to %s (append=%s)", len(bridge_lines), path, append)
+    logger.info("Wrote %d bridges to %s (append=%s)", len(parsed), path, append)
 
 
 def format_bridges_for_torrc(bridges: list[Bridge]) -> list[str]:

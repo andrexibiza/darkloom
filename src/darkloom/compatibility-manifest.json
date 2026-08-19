@@ -1,101 +1,178 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "compatibility_model": "semantic",
   "upstream": {
     "repository": "https://github.com/NousResearch/hermes-agent.git",
-    "required_commit": "e89216e7f5d5ce9edf186082160791d207901828",
-    "verified_commits": [
-      "e89216e7f5d5ce9edf186082160791d207901828"
-    ]
+    "verified_commit": "2eb0b3b2c895e4a6f99714a52d35578088ad8ec7",
+    "required_commit": "2eb0b3b2c895e4a6f99714a52d35578088ad8ec7",
+    "baseline_commit": "e89216e7f5d5ce9edf186082160791d207901828",
+    "verified_at": "2026-08-19T23:47:30Z",
+    "verification_scope": "exact revision plus semantic source contracts; runtime proof remains required for routing claims"
+  },
+  "preservation_policy": {
+    "unsupported_features_remain_enabled": true,
+    "fail_closed_scope": "darkloom_owned_operations_only",
+    "unknown_upstream_features": "unverified_preserved",
+    "runtime_evidence_required_for_routing_claims": true
   },
   "patch": {
-    "id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714",
+    "id": "darkloom/historical-0003@22fd1e92f714",
     "path": "patches/0003-harden-tor-proxy-all-platforms.patch",
-    "sha256": "22fd1e92f714fa647898bcb1ebea7e1b03e5e9a354c54c33c61016d24c237f8f"
+    "sha256": "22fd1e92f714fa647898bcb1ebea7e1b03e5e9a354c54c33c61016d24c237f8f",
+    "status": "historical"
   },
-  "patched_files": {
-    "gateway/platforms/base.py": "76811bfdf77a243ccf7a0fe1a606380b2f642e52392b102e01e9ccaccfc22cc6",
-    "plugins/platforms/photon/adapter.py": "ddf6b17d7885f14c529f014ab221d20edde7c2efa2bf1766fb505384f75cc137",
-    "plugins/platforms/slack/adapter.py": "ffe81dd481752c9ad161cc21768185e37160b975dfacd4ece084c22f565f57b1",
-    "plugins/platforms/whatsapp/adapter.py": "7c6f6a27ade69746020e093a07764fbeaca878bfdda9310973d1264d62c2a634",
-    "plugins/web/firecrawl/provider.py": "db604cbf9b1ae2d83884ba65cba5570a735b078375db906ebd2c71b4f53daa86",
-    "tools/browser_tool.py": "91ee7ad0daf057f502335bbb5dc20dea813d597d9d2d2486a92035e661638f8c"
-  },
+  "historical_patches": [
+    {
+      "path": "patches/0001-photon-proxy.patch",
+      "status": "historical"
+    },
+    {
+      "path": "patches/0002-whatsapp-proxy.patch",
+      "status": "historical"
+    },
+    {
+      "path": "patches/0003-harden-tor-proxy-all-platforms.patch",
+      "sha256": "22fd1e92f714fa647898bcb1ebea7e1b03e5e9a354c54c33c61016d24c237f8f",
+      "status": "historical"
+    },
+    {
+      "path": "patches/0004-central-network-policy-fail-closed.patch",
+      "status": "historical"
+    }
+  ],
+  "patched_files": {},
   "controls": [
     {
-      "id": "HT-001",
-      "title": "Photon local sidecar IPC stays direct while the sidecar receives proxy configuration via env",
-      "files": [
-        "plugins/platforms/photon/adapter.py"
+      "id": "DL-001",
+      "title": "Hermes central proxy resolution remains upstream authority",
+      "status": "upstream_native",
+      "ownership": "upstream",
+      "files": ["gateway/platforms/base.py"],
+      "checks": [
+        {
+          "file": "gateway/platforms/base.py",
+          "contains": ["def resolve_proxy_url(", "def is_host_excluded_by_no_proxy("]
+        }
       ],
-      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "runtime_probe_required": false,
+      "preserve_feature": true,
+      "patch_id": "none/upstream-native"
     },
     {
-      "id": "HT-002",
-      "title": "WhatsApp local bridge IPC stays direct while the bridge receives proxy configuration",
+      "id": "DL-002",
+      "title": "Photon sidecar routing is unverified and Photon remains enabled",
+      "status": "unverified",
+      "ownership": "upstream",
       "files": [
-        "plugins/platforms/whatsapp/adapter.py"
+        "plugins/platforms/photon/adapter.py",
+        "plugins/platforms/photon/sidecar/index.mjs"
       ],
-      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "checks": [
+        {
+          "file": "plugins/platforms/photon/adapter.py",
+          "contains": ["PHOTON_SIDECAR_WATCH_STDIN", "async def _start_sidecar("]
+        }
+      ],
+      "runtime_probe_required": true,
+      "preserve_feature": true,
+      "patch_id": "historical/0001+0003"
     },
     {
-      "id": "HT-003",
-      "title": "Browser command receives an explicit proxy-server argument",
-      "files": [
-        "tools/browser_tool.py"
+      "id": "DL-003",
+      "title": "WhatsApp bridge routing is unverified and WhatsApp remains enabled",
+      "status": "unverified",
+      "ownership": "upstream",
+      "files": ["plugins/platforms/whatsapp/adapter.py"],
+      "checks": [
+        {
+          "file": "plugins/platforms/whatsapp/adapter.py",
+          "contains": ["bridge_env", "subprocess.Popen("]
+        }
       ],
-      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "runtime_probe_required": true,
+      "preserve_feature": true,
+      "patch_id": "historical/0002+0003"
     },
     {
-      "id": "HT-004",
-      "title": "Firecrawl client receives explicit proxy configuration",
-      "files": [
-        "plugins/web/firecrawl/provider.py"
+      "id": "DL-004",
+      "title": "Browser routing is backend-specific and requires runtime proof",
+      "status": "unverified",
+      "ownership": "upstream",
+      "files": ["tools/browser_tool.py", "agent/browser_provider.py", "agent/browser_registry.py"],
+      "checks": [
+        {
+          "file": "tools/browser_tool.py",
+          "contains": ["_run_chrome_fallback_command", "_build_browser_env"]
+        }
       ],
-      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "runtime_probe_required": true,
+      "preserve_feature": true,
+      "patch_id": "historical/0003"
     },
     {
-      "id": "HT-005",
-      "title": "Slack reports unsupported SOCKS configuration",
-      "files": [
-        "plugins/platforms/slack/adapter.py"
+      "id": "DL-005",
+      "title": "Firecrawl local-client routing does not prove remote fetch anonymity",
+      "status": "unverified",
+      "ownership": "upstream",
+      "files": ["plugins/web/firecrawl/provider.py"],
+      "checks": [
+        {
+          "file": "plugins/web/firecrawl/provider.py",
+          "contains": ["def _get_firecrawl_client("]
+        }
       ],
-      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "runtime_probe_required": true,
+      "preserve_feature": true,
+      "patch_id": "historical/0003"
     },
     {
-      "id": "HT-006",
-      "title": "Empty platform proxy overrides are reported",
-      "files": [
-        "gateway/platforms/base.py"
+      "id": "DL-006",
+      "title": "Slack SOCKS routing is unsupported but Slack remains enabled",
+      "status": "unsupported_preserved",
+      "ownership": "upstream",
+      "files": ["plugins/platforms/slack/adapter.py"],
+      "checks": [
+        {
+          "file": "plugins/platforms/slack/adapter.py",
+          "contains": ["_resolve_slack_proxy_url", "AsyncSocketModeHandler"]
+        }
       ],
-      "patch_id": "darkloom/0003-harden-tor-proxy-all-platforms@22fd1e92f714"
+      "runtime_probe_required": true,
+      "preserve_feature": true,
+      "patch_id": "historical/0003"
     },
     {
-      "id": "HT-007",
-      "title": "Remote DNS resolution through SOCKS",
+      "id": "DL-007",
+      "title": "Discord Voice is outside Darkloom's SOCKS boundary and remains enabled",
+      "status": "unsupported_preserved",
+      "ownership": "upstream",
+      "files": ["plugins/platforms/discord/adapter.py"],
+      "checks": [],
+      "runtime_probe_required": false,
+      "preserve_feature": true,
+      "patch_id": "none/preservation-contract"
+    },
+    {
+      "id": "DL-008",
+      "title": "SMTP, IMAP, and IRC remain available without Darkloom routing claims",
+      "status": "unsupported_preserved",
+      "ownership": "upstream",
       "files": [],
-      "patch_id": "none/documentation-only",
-      "documentation_only": true
+      "checks": [],
+      "runtime_probe_required": false,
+      "preserve_feature": true,
+      "patch_id": "none/preservation-contract"
     },
     {
-      "id": "HT-008",
-      "title": "SDK SOCKS compatibility",
-      "files": [],
-      "patch_id": "none/documentation-only",
-      "documentation_only": true
-    },
-    {
-      "id": "HT-009",
-      "title": "Strict-mode adapter blocking",
-      "files": [],
-      "patch_id": "none/documentation-only",
-      "documentation_only": true
-    },
-    {
-      "id": "HT-010",
-      "title": "Arbitrary subprocess egress enforcement",
-      "files": [],
-      "patch_id": "none/documentation-only",
-      "documentation_only": true
+      "id": "DL-009",
+      "title": "Arbitrary subprocess egress remains unverified without OS enforcement",
+      "status": "unverified",
+      "ownership": "upstream",
+      "files": ["agent/tool_executor.py", "agent/tool_guardrails.py"],
+      "checks": [],
+      "runtime_probe_required": true,
+      "preserve_feature": true,
+      "patch_id": "historical/0004"
     }
   ]
 }

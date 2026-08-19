@@ -1,7 +1,7 @@
 [project]
 name = "darkloom"
 version = "0.1.0"
-description = "Micro-TOR client for Hermes agents — bridge-backed anonymous routing via SOCKS5"
+description = "Bounded privacy transport and semantic Hermes compatibility controls"
 requires-python = ">=3.11"
 dependencies = [
     "httpx[socks]>=0.28",

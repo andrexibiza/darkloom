@@ -6,8 +6,8 @@ Darkloom's semantic compatibility contract is reviewed against:
 
 ```text
 NousResearch/hermes-agent
-2eb0b3b2c895e4a6f99714a52d35578088ad8ec7
-reviewed 2026-08-19
+f43eabee5f36e11448086ee8ee17c499958e81bf
+reviewed 2026-08-20
 ```
 
 The exact SHA is stored in `src/darkloom/compatibility-manifest.json`. CI checks out that revision and verifies the expected source contracts.

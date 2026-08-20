@@ -3,10 +3,10 @@
   "compatibility_model": "semantic",
   "upstream": {
     "repository": "https://github.com/NousResearch/hermes-agent.git",
-    "verified_commit": "2eb0b3b2c895e4a6f99714a52d35578088ad8ec7",
-    "required_commit": "2eb0b3b2c895e4a6f99714a52d35578088ad8ec7",
+    "verified_commit": "f43eabee5f36e11448086ee8ee17c499958e81bf",
+    "required_commit": "f43eabee5f36e11448086ee8ee17c499958e81bf",
     "baseline_commit": "e89216e7f5d5ce9edf186082160791d207901828",
-    "verified_at": "2026-08-19T23:47:30Z",
+    "verified_at": "2026-08-20T14:43:35Z",
     "verification_scope": "exact revision plus semantic source contracts; runtime proof remains required for routing claims"
   },
   "preservation_policy": {

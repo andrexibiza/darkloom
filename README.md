@@ -9,7 +9,7 @@ Darkloom runs and verifies the network operations it owns. It does **not** take 
 | Surface | Value |
 |---|---|
 | Hermes repository | `NousResearch/hermes-agent` |
-| Reviewed commit | `2eb0b3b2c895e4a6f99714a52d35578088ad8ec7` |
+| Reviewed commit | `f43eabee5f36e11448086ee8ee17c499958e81bf` |
 | Compatibility model | Semantic source contracts + exact revision |
 | Runtime routing claims | Require runtime evidence |
 | Historical patches | Provenance only; never auto-applied |

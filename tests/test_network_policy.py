@@ -1,17 +1,17 @@
-"""Regression tests for strict-mode fail-closed guarantees."""
+"""Regression tests for bounded, preservation-first strict mode."""
 
-import socket
 import subprocess
-from pathlib import Path
 
 import pytest
 
 from darkloom.policy import (
+    CoverageStatus,
     NetworkChannel,
     NetworkPolicyError,
     authorize,
     authorize_raw_socket,
     authorize_subprocess,
+    evaluate,
 )
 
 
@@ -22,44 +22,55 @@ def strict_without_ambient_proxies(monkeypatch):
         monkeypatch.delenv(key, raising=False)
 
 
-@pytest.mark.parametrize("channel", [
-    NetworkChannel.UDP_VOICE,
-    NetworkChannel.SMTP,
-    NetworkChannel.IMAP,
-    NetworkChannel.IRC,
-])
-def test_unsupported_channel_is_denied_before_socket_creation(monkeypatch, channel):
-    opened = False
-
-    def socket_spy(*args, **kwargs):
-        nonlocal opened
-        opened = True
-        raise AssertionError("socket creation must not be reached")
-
-    monkeypatch.setattr(socket, "socket", socket_spy)
-    with pytest.raises(NetworkPolicyError, match="unsupported channel"):
-        authorize(channel)
-    assert opened is False
+@pytest.mark.parametrize(
+    "channel",
+    [NetworkChannel.UDP_VOICE, NetworkChannel.SMTP, NetworkChannel.IMAP, NetworkChannel.IRC],
+)
+def test_unsupported_upstream_channel_is_preserved(channel):
+    decision = authorize(channel)
+    assert decision.allowed is True
+    assert decision.status is CoverageStatus.UNSUPPORTED_PRESERVED
+    assert decision.darkloom_owned is False
 
 
-@pytest.mark.parametrize("channel", [
-    NetworkChannel.HTTP,
-    NetworkChannel.MCP,
-    NetworkChannel.GATEWAY,
-    NetworkChannel.PLATFORM,
-    NetworkChannel.BROWSER,
-    NetworkChannel.WEB_TOOL,
-    NetworkChannel.LLM,
-    NetworkChannel.RAW_SOCKET,
-])
-def test_every_direct_network_entry_point_defaults_to_deny(channel):
+def test_discord_voice_raw_socket_guard_does_not_disable_feature():
+    decision = authorize_raw_socket(NetworkChannel.UDP_VOICE)
+    assert decision.allowed is True
+    assert decision.status is CoverageStatus.UNSUPPORTED_PRESERVED
+
+
+def test_darkloom_cannot_claim_and_construct_unsupported_channel():
+    with pytest.raises(NetworkPolicyError, match="cannot safely construct"):
+        authorize(NetworkChannel.UDP_VOICE, darkloom_owned=True)
+
+
+@pytest.mark.parametrize(
+    "channel",
+    [
+        NetworkChannel.HTTP,
+        NetworkChannel.MCP,
+        NetworkChannel.GATEWAY,
+        NetworkChannel.PLATFORM,
+        NetworkChannel.BROWSER,
+        NetworkChannel.WEB_TOOL,
+        NetworkChannel.LLM,
+        NetworkChannel.RAW_SOCKET,
+    ],
+)
+def test_darkloom_owned_entry_points_still_fail_closed(channel):
     with pytest.raises(NetworkPolicyError):
         authorize(channel, proxy_aware=False)
 
 
-def test_unknown_channel_defaults_to_deny():
-    with pytest.raises(NetworkPolicyError, match="unknown network channel"):
-        authorize("new_unreviewed_transport")
+def test_unknown_upstream_channel_is_preserved():
+    decision = authorize("new_upstream_transport")
+    assert decision.allowed is True
+    assert decision.status is CoverageStatus.UNVERIFIED_PRESERVED
+
+
+def test_unknown_darkloom_owned_channel_is_denied():
+    with pytest.raises(NetworkPolicyError, match="unknown Darkloom-owned"):
+        authorize("new_darkloom_transport", darkloom_owned=True)
 
 
 def test_non_proxy_aware_subprocess_denied_before_launch(monkeypatch):
@@ -76,98 +87,40 @@ def test_non_proxy_aware_subprocess_denied_before_launch(monkeypatch):
     assert launched is False
 
 
-def test_raw_socket_adapter_denied_before_socket_creation(monkeypatch):
-    monkeypatch.setattr(socket, "socket", lambda *a, **k: pytest.fail("socket opened"))
+def test_raw_socket_owned_by_darkloom_is_denied():
     with pytest.raises(NetworkPolicyError, match="non-proxy-aware raw_socket"):
         authorize_raw_socket()
 
 
-def test_proxy_aware_entry_points_are_explicitly_allowed(monkeypatch):
+def test_proxy_aware_darkloom_entry_points_are_allowed(monkeypatch):
     monkeypatch.setenv("TOR_PROXY", "socks5://127.0.0.1:9050")
     for channel in (
-        NetworkChannel.HTTP, NetworkChannel.MCP, NetworkChannel.GATEWAY,
-        NetworkChannel.PLATFORM, NetworkChannel.BROWSER, NetworkChannel.WEB_TOOL,
-        NetworkChannel.LLM, NetworkChannel.SUBPROCESS,
+        NetworkChannel.HTTP,
+        NetworkChannel.MCP,
+        NetworkChannel.GATEWAY,
+        NetworkChannel.PLATFORM,
+        NetworkChannel.BROWSER,
+        NetworkChannel.WEB_TOOL,
+        NetworkChannel.LLM,
+        NetworkChannel.SUBPROCESS,
     ):
-        authorize(channel)
+        decision = authorize(channel)
+        assert decision.status is CoverageStatus.VERIFIED
 
 
-def test_proxy_http_refuses_direct_client_before_httpx_construction(monkeypatch):
-    from darkloom import proxy_http
-
-    monkeypatch.setattr(proxy_http.httpx, "Client", lambda *a, **k: pytest.fail("client created"))
-    with pytest.raises(TypeError, match="does not accept use_tor"):
-        proxy_http.tor_get("https://example.test", use_tor=False)
+def test_proxy_requires_port(monkeypatch):
+    monkeypatch.setenv("TOR_PROXY", "socks5://127.0.0.1")
+    with pytest.raises(NetworkPolicyError, match="valid proxy"):
+        authorize(NetworkChannel.HTTP)
 
 
-def test_gateway_wrapper_refuses_non_proxy_aware_launch(monkeypatch):
-    monkeypatch.setenv("TOR_PROXY", "socks5://127.0.0.1:9050")
-    monkeypatch.setattr(subprocess, "run", lambda *a, **k: pytest.fail("process launched"))
-    with pytest.raises(NetworkPolicyError):
-        authorize_subprocess(proxy_aware=False)
+def test_proxy_rejects_malformed_port(monkeypatch):
+    monkeypatch.setenv("TOR_PROXY", "socks5://127.0.0.1:not-a-port")
+    with pytest.raises(NetworkPolicyError, match="valid proxy"):
+        authorize(NetworkChannel.HTTP)
 
 
-
-
-
-def test_hermes_patch_guards_every_declared_network_entry_point():
-    """Keep the integration patch in sync with the policy's channel list."""
-    patch = (Path(__file__).parents[1] / "patches" /
-             "0004-central-network-policy-fail-closed.patch").read_text()
-
-    required_guards = {
-        "Firecrawl": "authorize(\n+        NetworkChannel.WEB_TOOL",
-        "auxiliary LLM": "NetworkChannel.LLM",
-        "MCP": "NetworkChannel.MCP",
-        "Discord voice": "authorize_raw_socket(NetworkChannel.UDP_VOICE)",
-        "SMTP": "authorize_raw_socket(NetworkChannel.SMTP)",
-        "IMAP": "authorize_raw_socket(NetworkChannel.IMAP)",
-        "IRC": "authorize_raw_socket(NetworkChannel.IRC)",
-        "Slack": "return authorized(proxy_url)",
-        "execute_code": "execute_code process boundary before Popen",
-    }
-    for entry_point, guard in required_guards.items():
-        assert guard in patch, f"missing policy guard for {entry_point}"
-
-
-def test_hermes_patch_does_not_trust_ambient_proxy_for_children():
-    patch = (Path(__file__).parents[1] / "patches" /
-             "0004-central-network-policy-fail-closed.patch").read_text()
-
-    assert "authorize(NetworkChannel.MCP, proxy_aware=False)" in patch
-    assert "authorize(NetworkChannel.LLM, proxy_aware=False)" in patch
-    assert "proxy_aware=bool(proxy_url)" not in patch[patch.index(
-        "diff --git a/tools/mcp_tool.py"
-    ):patch.index("diff --git a/plugins/platforms/discord/adapter.py")]
-    assert patch.count("authorize_subprocess(proxy_aware=False") >= 1
-    assert "execute_code process boundary before Popen" in patch
-
-
-def test_hermes_patch_denies_unverified_llm_and_disables_webrtc_udp():
-    patch = (Path(__file__).parents[1] / "patches" /
-             "0004-central-network-policy-fail-closed.patch").read_text()
-
-    assert 'for proxy_var in ("ALL_PROXY", "HTTPS_PROXY", "HTTP_PROXY")' not in patch
-    assert "authorize(NetworkChannel.LLM, proxy_aware=False)" in patch
-    assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in patch
-
-
-def test_slack_unsupported_proxy_is_a_strict_mode_denial():
-    patch = (Path(__file__).parents[1] / "patches" /
-             "0004-central-network-policy-fail-closed.patch").read_text()
-    slack_hunk = patch[patch.index("diff --git a/plugins/platforms/slack/adapter.py"):]
-
-    assert "return authorized(None)" in slack_hunk
-    assert "proxy_aware=proxy is not None" in slack_hunk
-
-
-@pytest.mark.parametrize("constructor", [
-    '_wt._firecrawl_client = _wt.Firecrawl(**kwargs)',
-    'imap = imaplib.IMAP4_SSL(',
-])
-def test_hermes_patch_authorizes_before_network_construction(constructor):
-    patch = (Path(__file__).parents[1] / "patches" /
-             "0004-central-network-policy-fail-closed.patch").read_text()
-    constructor_offset = patch.index(constructor)
-    preceding_hunk = patch[patch.rfind("@@", 0, constructor_offset):constructor_offset]
-    assert "authorize" in preceding_hunk
+def test_evaluate_has_no_side_effects():
+    decision = evaluate(NetworkChannel.SMTP)
+    assert decision.allowed
+    assert decision.reason

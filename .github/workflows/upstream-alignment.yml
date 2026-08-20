@@ -3,7 +3,7 @@ name: Darkloom upstream alignment
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, agent/rebase-hermes-main-2026-08-19]
   workflow_dispatch:
 
 permissions:

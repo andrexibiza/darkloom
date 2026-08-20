@@ -1,0 +1,45 @@
+name: Validate Darkloom rebase head
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    if: github.head_ref == 'agent/rebase-hermes-main-2026-08-19'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install Darkloom
+        run: python -m pip install -e ".[dev,mcp]"
+      - name: Compile
+        run: python -m compileall -q src scripts tests
+      - name: Test
+        run: python -m pytest -q
+      - name: Verify exact Hermes source contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          HERMES_SHA="$(python - <<'PY'
+          import json
+          from pathlib import Path
+          manifest = json.loads(Path('src/darkloom/compatibility-manifest.json').read_text())
+          print(manifest['upstream']['verified_commit'])
+          PY
+          )"
+          HERMES_ROOT="$RUNNER_TEMP/hermes-agent"
+          git init "$HERMES_ROOT"
+          git -C "$HERMES_ROOT" remote add origin https://github.com/NousResearch/hermes-agent.git
+          git -C "$HERMES_ROOT" fetch --depth=1 origin "$HERMES_SHA"
+          git -C "$HERMES_ROOT" checkout --detach FETCH_HEAD
+          python scripts/check_upstream_alignment.py "$HERMES_ROOT"

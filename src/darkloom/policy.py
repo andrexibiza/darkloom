@@ -101,10 +101,14 @@ def _valid_proxy(proxy_url: str | None) -> bool:
     if not proxy_url:
         return False
     parsed = urlparse(proxy_url)
+    try:
+        port = parsed.port
+    except ValueError:
+        return False
     return (
         parsed.scheme.lower() in {"socks5", "socks5h", "http", "https"}
         and bool(parsed.hostname)
-        and parsed.port is not None
+        and port is not None
     )
 
 

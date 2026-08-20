@@ -10,11 +10,8 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import subprocess
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Mapping, Optional
 from urllib.parse import urlsplit
 
@@ -93,7 +90,17 @@ def _validate_generic_proxy(name: str, value: str, policy: ProxyPolicy) -> None:
     if candidate.lower() in {"direct", "direct://", "none", "off"}:
         raise ProxyPolicyError(f"{name} disables Darkloom proxy routing")
     parsed = urlsplit(candidate)
-    if parsed.scheme not in {"socks5", "socks5h"} or not parsed.hostname or parsed.port is None:
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ProxyPolicyError(
+            f"{name} has an unsupported proxy value: {candidate!r}"
+        ) from exc
+    if (
+        parsed.scheme not in {"socks5", "socks5h"}
+        or not parsed.hostname
+        or port is None
+    ):
         raise ProxyPolicyError(f"{name} has an unsupported proxy value: {candidate!r}")
     if candidate != policy.url:
         raise ProxyPolicyError(

@@ -36,6 +36,18 @@ def test_gateway_policy_preserves_platform_specific_override():
     assert policy.strict is True
 
 
+def test_gateway_policy_rejects_malformed_generic_proxy_port():
+    from darkloom.gateway import ProxyPolicyError, establish_proxy_policy
+
+    with pytest.raises(ProxyPolicyError, match="unsupported proxy value"):
+        establish_proxy_policy(
+            environment={
+                "TOR_STRICT_MODE": "1",
+                "ALL_PROXY": "socks5://127.0.0.1:not-a-port",
+            }
+        )
+
+
 def test_strict_gateway_reports_unverified_platform_clients_without_blocking(monkeypatch):
     import darkloom.gateway as gateway
 
@@ -60,7 +72,7 @@ def test_gateway_strict_mode_verifies_before_starting_tor_after_policy_validatio
 
 
 def test_compatibility_without_hermes_distinguishes_preserved_and_required(tmp_path):
-    from darkoom.hardening import ControlStatus, verify_compatibility
+    from darkloom.hardening import ControlStatus, verify_compatibility
 
     results = verify_compatibility(tmp_path, strict=False)
     by_declared = {result.control.declared_status for result in results}
@@ -86,7 +98,7 @@ def test_preserved_limitations_are_not_reported_as_enforcement(tmp_path):
 
 
 def test_strict_compatibility_preserves_documentation_only_controls(monkeypatch, tmp_path):
-    from darkoom import hardening
+    from darkloom import hardening
 
     manifest = {
         "schema_version": 2,

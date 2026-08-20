@@ -114,6 +114,12 @@ def test_proxy_requires_port(monkeypatch):
         authorize(NetworkChannel.HTTP)
 
 
+def test_proxy_rejects_malformed_port(monkeypatch):
+    monkeypatch.setenv("TOR_PROXY", "socks5://127.0.0.1:not-a-port")
+    with pytest.raises(NetworkPolicyError, match="valid proxy"):
+        authorize(NetworkChannel.HTTP)
+
+
 def test_evaluate_has_no_side_effects():
     decision = evaluate(NetworkChannel.SMTP)
     assert decision.allowed
